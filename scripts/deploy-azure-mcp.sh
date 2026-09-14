@@ -130,6 +130,9 @@ else
   echo "   ✅ Found Web App: $APP_NAME"
 fi
 
+# Ensure AlwaysOn is enabled to prevent idle shutdown and 503 cold-start errors
+az webapp config set --name "$APP_NAME" --resource-group "$RESOURCE_GROUP" --always-on true --output none 2>/dev/null || true
+
 # 7. Configure App Settings & Environment Variables
 echo ""
 echo "--> 5. Setting Environment Variables and Storage Configuration..."
