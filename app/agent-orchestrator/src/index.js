@@ -526,7 +526,8 @@ app.post('/api/agent/chat', async (req, res) => {
       hop5_gcpMultiHopToken: step2Exchange ? {
         name: 'Hop 5: RFC 8693 Multi-Hop Recursive Token (Turn 2 -> GCP BigQuery MCP)',
         cloud: 'GCP',
-        tokenType: 'RFC 8693 Multi-Hop Delegated Access Token',
+        tokenType: 'Google Cloud IAM / RFC 8693 Delegated Token',
+        issuer: 'Google Cloud IAM (https://accounts.google.com)',
         sub: step2Exchange.claims.sub,
         aud: step2Exchange.claims.aud,
         scope: step2Exchange.claims.roles || step2Exchange.claims.scope,
@@ -542,7 +543,8 @@ app.post('/api/agent/chat', async (req, res) => {
       hop5_graphToken: step2Exchange ? {
         name: 'Hop 5: RFC 8693 Multi-Hop Recursive Token (Turn 2 -> GCP BigQuery MCP)',
         cloud: 'GCP',
-        tokenType: 'RFC 8693 Multi-Hop Delegated Access Token',
+        tokenType: 'Google Cloud IAM / RFC 8693 Delegated Token',
+        issuer: 'Google Cloud IAM (https://accounts.google.com)',
         sub: step2Exchange.claims.sub,
         aud: step2Exchange.claims.aud,
         scope: step2Exchange.claims.roles || step2Exchange.claims.scope,

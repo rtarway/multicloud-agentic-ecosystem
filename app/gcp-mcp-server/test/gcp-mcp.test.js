@@ -53,7 +53,7 @@ function mockRequest(method, url, headers = {}, body = {}) {
 
 function mintToken(claims = {}) {
   const payload = {
-    iss: 'https://identity.example.com/realms/azure-wif-realm',
+    iss: 'https://accounts.google.com',
     sub: 'bob@example.com',
     aud: 'gcp-bigquery-mcp-server',
     scope: 'mcp:bigquery:query',
@@ -126,6 +126,28 @@ test('GCP BigQuery MCP Server Test Suite (Spec 2026-07-15 & RFC 8693 Multi-Hop)'
 
     assert.equal(res.body.result.isError, true);
     assert.ok(res.body.result.content[0].text.includes('Authentication Failure'));
+  });
+
+  await t.test('POST /mcp tools/call rejects tokens issued by Keycloak (enforces Google Cloud IAM protection)', async () => {
+    const keycloakToken = mintToken({
+      iss: 'https://identity.example.com/realms/azure-wif-realm'
+    });
+
+    const res = await mockRequest('POST', '/mcp', {
+      authorization: `Bearer ${keycloakToken}`
+    }, {
+      jsonrpc: '2.0',
+      id: 'call-keycloak-blocked',
+      method: 'tools/call',
+      params: {
+        name: 'bigquery_query_sales',
+        arguments: { quarter: 'Q2-2026', region: 'north-america', metric: 'revenue_breakdown' }
+      }
+    });
+
+    assert.equal(res.body.result.isError, true);
+    assert.ok(res.body.result.content[0].text.includes('protected by Google Cloud IAM'));
+    assert.ok(res.body.result.content[0].text.includes('Keycloak tokens are not accepted'));
   });
 
   await t.test('POST /mcp tools/call rejects tokens with untrusted actor in multi-hop chain', async () => {

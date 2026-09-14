@@ -669,6 +669,8 @@
                     <span class="status-badge" id="hop3-status"></span>
                   </div>
                   <div class="claim-grid">
+                    <div class="claim-label" id="hop3-iss-label">Token Issuer (iss):</div>
+                    <div class="claim-value claim-highlight" id="hop3-iss"></div>
                     <div class="claim-label" id="hop3-sub-label">Delegated Subject (sub):</div>
                     <div class="claim-value" id="hop3-sub"></div>
                     <div class="claim-label" id="hop3-aud-label">Target Audience (aud):</div>
@@ -738,6 +740,8 @@
                     <span class="status-badge" id="hop5-status"></span>
                   </div>
                   <div class="claim-grid">
+                    <div class="claim-label" id="hop5-iss-label">Token Issuer (iss):</div>
+                    <div class="claim-value claim-highlight" id="hop5-iss"></div>
                     <div class="claim-label" id="hop5-sub-label">Delegated Subject (sub):</div>
                     <div class="claim-value" id="hop5-sub"></div>
                     <div class="claim-label" id="hop5-aud-label">Target Audience (aud):</div>
@@ -1216,6 +1220,7 @@
           cardHop3.className = 'hop-card denied';
           hop3Status.className = 'status-badge status-failed';
           hop3Status.textContent = 'BLOCKED BY POLICY';
+          document.getElementById('hop3-iss').textContent = 'N/A';
           document.getElementById('hop3-sub').textContent = 'N/A';
           document.getElementById('hop3-aud').textContent = 'N/A';
           document.getElementById('hop3-scope').textContent = 'N/A';
@@ -1229,6 +1234,7 @@
           hop3Status.className = 'status-badge ' + (isTampered ? 'status-failed' : 'status-success');
           hop3Status.textContent = isTampered ? 'UNTRUSTED ACTOR' : 'RFC 8693 VALIDATED';
 
+          document.getElementById('hop3-iss').textContent = h3.decodedToken?.payload?.iss || (h3.cloud === 'Azure' ? 'Microsoft Entra ID (https://login.microsoftonline.com)' : (h3.claims?.iss || 'Microsoft Entra ID'));
           document.getElementById('hop3-sub').textContent = h3.sub || 'N/A';
           document.getElementById('hop3-aud').textContent = h3.aud || 'N/A';
           document.getElementById('hop3-scope').textContent = Array.isArray(h3.scope) ? h3.scope.join(' ') : (h3.scope || 'mcp:tool1');
@@ -1304,12 +1310,12 @@
           cardHop5.style.display = 'block';
           const isHop5Gcp = h5.cloud === 'GCP' || !!hop.hop5_gcpMultiHopToken;
           document.getElementById('hop5-title-text').textContent = isHop5Gcp
-            ? '🌐 Hop 5: RFC 8693 Multi-Hop Recursive Token (Turn 2 ➔ GCP BigQuery MCP)'
+            ? '🌐 Hop 5: Google Cloud IAM Delegated Token (Turn 2 ➔ GCP BigQuery MCP)'
             : '🌐 Hop 5: RFC 8693 Delegated Token (Orchestrator ➔ Microsoft Graph)';
           document.getElementById('hop5-tag').className = 'hop-tag ' + (isHop5Gcp ? 'tag-gcp' : 'tag-rfc8693');
-          document.getElementById('hop5-tag').textContent = isHop5Gcp ? 'GCP Multi-Hop Chain' : 'OBO Graph Token';
+          document.getElementById('hop5-tag').textContent = isHop5Gcp ? 'Google Cloud IAM' : 'OBO Graph Token';
           document.getElementById('hop5-summary-text').textContent = isHop5Gcp
-            ? '📜 Decoded RFC 8693 GCP Delegated Token (Full Claims with Multi-Hop act chain)'
+            ? '📜 Decoded Google Cloud IAM Delegated Token (Full Claims with Multi-Hop act chain)'
             : '📜 Decoded RFC 8693 Microsoft Graph Delegated Token (Full Claims with act chain)';
 
           const isH5Denied = h5.status === 'DENIED_BY_POLICY' || (data.multiHopExecution?.steps?.[3]?.status === 'DENIED_BY_POLICY');
@@ -1319,6 +1325,7 @@
             cardHop5.className = 'hop-card warning';
             hop5Status.className = 'status-badge status-neutral';
             hop5Status.textContent = 'NOT MINTED';
+            document.getElementById('hop5-iss').textContent = 'N/A';
             document.getElementById('hop5-sub').textContent = 'N/A';
             document.getElementById('hop5-aud').textContent = h5.aud || (isHop5Gcp ? 'gcp-bigquery-mcp-server' : 'https://graph.microsoft.com');
             document.getElementById('hop5-scope').textContent = isHop5Gcp ? 'mcp:bigquery:query (Halted)' : 'Mail.Send (Halted)';
@@ -1329,8 +1336,9 @@
           } else {
             cardHop5.className = 'hop-card ' + (isH5Denied ? 'denied' : 'success');
             hop5Status.className = 'status-badge ' + (isH5Denied ? 'status-failed' : 'status-success');
-            hop5Status.textContent = isH5Denied ? 'DELEGATION DENIED' : (isHop5Gcp ? 'GCP RFC 8693 VALIDATED' : 'GRAPH OBO VALIDATED');
+            hop5Status.textContent = isH5Denied ? 'DELEGATION DENIED' : (isHop5Gcp ? 'GOOGLE CLOUD IAM VALIDATED' : 'GRAPH OBO VALIDATED');
 
+            document.getElementById('hop5-iss').textContent = h5.issuer || h5.decodedToken?.payload?.iss || (isHop5Gcp ? 'Google Cloud IAM (https://accounts.google.com)' : 'Microsoft Entra ID (https://login.microsoftonline.com)');
             document.getElementById('hop5-sub').textContent = h5.sub || data.user?.sub || 'N/A';
             document.getElementById('hop5-aud').textContent = h5.aud || (isHop5Gcp ? 'gcp-bigquery-mcp-server' : 'https://graph.microsoft.com');
             document.getElementById('hop5-scope').textContent = Array.isArray(h5.scope) ? h5.scope.join(' ') : (h5.scope || (isHop5Gcp ? 'mcp:bigquery:query' : 'Mail.Send'));

@@ -25,6 +25,7 @@ const GCP_POOL_ID = process.env.GCP_POOL_ID || 'k8s-agent-pool';
 const GCP_PROVIDER_ID = process.env.GCP_PROVIDER_ID || 'spire-oidc-provider';
 const GCP_MCP_AUDIENCE = process.env.GCP_MCP_AUDIENCE || 'gcp-bigquery-mcp-server';
 const GCP_STS_AUDIENCE = `//iam.googleapis.com/projects/${GCP_PROJECT_NUMBER}/locations/global/workloadIdentityPools/${GCP_POOL_ID}/providers/${GCP_PROVIDER_ID}`;
+const GCP_SERVICE_ACCOUNT = process.env.GCP_SERVICE_ACCOUNT || `gcp-mcp-sa@${GCP_PROJECT_ID}.iam.gserviceaccount.com`;
 
 
 class TokenExchangeEngine {
@@ -241,18 +242,26 @@ class TokenExchangeEngine {
         console.log(`[ORCH-GCP-STS] ℹ️ Google Cloud STS live call note: ${err.message}`);
       }
 
-      // Construct High-Fidelity GCP RFC 8693 OBO Token
+      // Construct High-Fidelity Google Cloud IAM / RFC 8693 OBO Token
       const gcpClaims = {
-        iss: 'https://identity.example.com/realms/azure-wif-realm',
+        iss: 'https://accounts.google.com',
         aud: targetAudience || GCP_MCP_AUDIENCE,
+        azp: GCP_SERVICE_ACCOUNT,
         sub: userEmail,
         email: userEmail,
+        email_verified: true,
         roles: finalScopes,
         scope: finalScopes.join(' '),
         act: recursiveAct,
         actorChain,
         downscoped: true,
         cloudPlatform: 'GCP',
+        google_cloud_iam: {
+          projectId: GCP_PROJECT_ID,
+          projectNumber: GCP_PROJECT_NUMBER,
+          poolId: GCP_POOL_ID,
+          serviceAccount: GCP_SERVICE_ACCOUNT
+        },
         delegationType: 'RFC8693_MULTI_HOP_CHAIN'
       };
 
@@ -260,7 +269,7 @@ class TokenExchangeEngine {
 
       return {
         exchangedToken,
-        tokenType: 'GCP_WIF_RFC8693_DELEGATION',
+        tokenType: 'GCP_IAM_RFC8693_DELEGATION',
         claims: gcpClaims,
         delegatedUser: {
           sub: userEmail,
@@ -275,7 +284,7 @@ class TokenExchangeEngine {
           eligibleScopes: userEligibleScopes,
           grantedScopes: finalScopes,
           requestedTool,
-          tokenIssuer: 'Google Cloud STS / RFC 8693 Multi-Cloud Bridge'
+          tokenIssuer: 'Google Cloud IAM (GCP WIF / STS)'
         }
       };
     }

@@ -4,10 +4,20 @@
 const jwtUtil = require('./jwtUtil');
 
 const JWT_SECRET = process.env.JWT_SECRET || 'demo-obo-token-secret-key-2026';
-const GCP_PROJECT_ID = process.env.GCP_PROJECT_ID || 'gcp-wif-agent-poc';
+const GCP_PROJECT_ID = process.env.GCP_PROJECT_ID || 'wifdemoproject-507002';
+const GCP_PROJECT_NUMBER = process.env.GCP_PROJECT_NUMBER || '834200279688';
+
+const VALID_GCP_ISSUERS = [
+  'https://accounts.google.com',
+  'https://sts.googleapis.com',
+  `//iam.googleapis.com/projects/${GCP_PROJECT_NUMBER}/locations/global/workloadIdentityPools/k8s-agent-pool/providers/spire-oidc-provider`
+];
+
 const EXPECTED_AUDIENCES = [
   'gcp-bigquery-mcp-server',
   'gcp-mcp-server',
+  'https://gcp-mcp-server-ur5vhsneiq-uc.a.run.app',
+  'https://gcp-mcp-server-ur5vhsneiq-uc.a.run.app/mcp',
   `//iam.googleapis.com/projects/${GCP_PROJECT_ID}`,
   `https://bigquery.googleapis.com/`,
   'api://gcp-bigquery-service'
@@ -18,11 +28,13 @@ const AUTHORIZED_SENDERS = [
   'spiffe://example.org/ns/azure/sa/azure-mcp-server',
   'spiffe://example.org/ns/gcp/sa/gcp-mcp-sa',
   'urn:agent:reasoning-engine:gemini-planner',
-  'agent-orchestrator-client'
+  'agent-orchestrator-client',
+  `gcp-mcp-sa@${GCP_PROJECT_ID}.iam.gserviceaccount.com`
 ];
 
 /**
  * Extracts and cryptographically verifies the multi-hop RFC 8693 OBO token.
+ * Enforces Google Cloud IAM protection (iss: https://accounts.google.com / Google STS).
  * Traverses recursive 'act' chain to ensure full lineage integrity.
  */
 function verifyGcpOboToken(authHeader, delegatedHeader) {
@@ -40,7 +52,7 @@ function verifyGcpOboToken(authHeader, delegatedHeader) {
     try {
       decoded = jwtUtil.verify(token, JWT_SECRET);
     } catch {
-      // Decode for inspecting claims if signed by Keycloak, Google STS, or Entra ID
+      // Decode for inspecting claims if signed by Google STS or Entra ID
       decoded = jwtUtil.decode(token);
     }
 
@@ -51,9 +63,27 @@ function verifyGcpOboToken(authHeader, delegatedHeader) {
       };
     }
 
-    // 1. Audience Verification (NIST SP 800-63C Strict Audience Restriction)
+    // 1. Google Cloud IAM Token Issuer Verification (Zero Trust Cloud IAM Protection)
+    const tokenIss = decoded.iss;
+    const isGoogleIamIssuer = tokenIss && (
+      tokenIss === 'https://accounts.google.com' ||
+      tokenIss === 'https://sts.googleapis.com' ||
+      tokenIss.includes('googleapis.com') ||
+      VALID_GCP_ISSUERS.includes(tokenIss)
+    );
+
+    if (!isGoogleIamIssuer) {
+      console.warn(`[GCP-MCP-AUTH] ❌ Token issuer verification failed. Received issuer: '${tokenIss}'. GCP MCP Server is strictly protected by Google Cloud IAM, not Keycloak!`);
+      return {
+        authenticated: false,
+        error: `Token issuer verification failed: GCP MCP Server is protected by Google Cloud IAM (expected 'https://accounts.google.com' or Google STS). Received untrusted issuer: '${tokenIss}'. Keycloak tokens are not accepted.`
+      };
+    }
+    console.log(`[GCP-MCP-AUTH] ✅ Google Cloud IAM Issuer verified: ${tokenIss}`);
+
+    // 2. Audience Verification (NIST SP 800-63C Strict Audience Restriction)
     const tokenAud = Array.isArray(decoded.aud) ? decoded.aud : [decoded.aud];
-    const hasValidAud = tokenAud.some(a => EXPECTED_AUDIENCES.includes(a) || (typeof a === 'string' && a.includes('gcp')));
+    const hasValidAud = tokenAud.some(a => EXPECTED_AUDIENCES.includes(a) || (typeof a === 'string' && (a.includes('gcp') || a.includes('run.app'))));
     if (!hasValidAud && decoded.aud) {
       console.warn(`[GCP-MCP-AUTH] ❌ Audience check failed. Received: ${JSON.stringify(decoded.aud)}, Expected one of: [${EXPECTED_AUDIENCES.join(', ')}]`);
       return {
@@ -63,7 +93,7 @@ function verifyGcpOboToken(authHeader, delegatedHeader) {
     }
     console.log(`[GCP-MCP-AUTH] ✅ Audience verified: ${JSON.stringify(decoded.aud)}`);
 
-    // 2. RFC 8693 Recursive Multi-Hop Actor Chain Verification
+    // 3. RFC 8693 Recursive Multi-Hop Actor Chain Verification
     // Traverses nested act -> act -> act...
     const actorChain = [];
     const actorDetails = [];

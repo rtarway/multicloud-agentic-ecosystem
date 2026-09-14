@@ -104,7 +104,7 @@ async function run() {
     // Generate Alice RFC 8693 Multi-Hop Token
     const aliceToken = jwtUtil.sign(
       {
-        iss: 'https://identity.example.com/realms/azure-wif-realm',
+        iss: 'https://accounts.google.com',
         aud: 'urn:mcp:server:gcp-bigquery',
         sub: 'alice@example.com',
         roles: ['admin', 'mcp:bigquery:query', 'mcp:bigquery:audit'],
