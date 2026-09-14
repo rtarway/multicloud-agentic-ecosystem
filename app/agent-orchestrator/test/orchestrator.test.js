@@ -11,13 +11,14 @@ const app = require('../src/index');
 
 const KEYCLOAK_SECRET = 'demo-obo-token-secret-key-2026';
 
-function mintKeycloakToken({ sub, email, roles }) {
+function mintKeycloakToken({ sub, email, roles, scope }) {
   return jwtUtil.sign(
     {
       sub,
       email: email || sub,
       preferred_username: sub.split('@')[0],
-      roles: roles || ['regular-user']
+      roles: roles || ['regular-user'],
+      scope: scope || ''
     },
     KEYCLOAK_SECRET,
     { expiresInSeconds: 3600 }
@@ -572,6 +573,49 @@ describe('A2A Agent Orchestrator & Token Exchange Tests', () => {
     assert.strictEqual(res.body.mcpResponse.isError, false);
     assert.strictEqual(res.body.mcpResponse.audit.decision, 'ALLOWED');
     assert.strictEqual(res.body.mcpResponse.audit.principal, 'alice@example.com');
+  });
+
+  test('Gate 1 RFC 8693 Section 2.1: Charlie (lacks mcp:bigquery:query in IdP) is blocked with SCOPE_ESCALATION_DENIED', async () => {
+    const charlieToken = mintKeycloakToken({
+      sub: 'charlie@example.com',
+      roles: ['auditor', 'Storage Blob Data Reader'],
+      scope: 'mcp:tool1 mcp:tool2' // Strictly lacks mcp:bigquery:query!
+    });
+
+    const res = await invokeApp(app, {
+      method: 'POST',
+      url: '/api/agent/chat',
+      headers: { Authorization: `Bearer ${charlieToken}` },
+      body: { prompt: 'Query BigQuery sales in north-america' }
+    });
+
+    assert.strictEqual(res.statusCode, 200);
+    assert.strictEqual(res.body.status, 'FAILED_POLICY_CHECK');
+    assert.strictEqual(res.body.code, 'SCOPE_ESCALATION_DENIED');
+    assert.ok((res.body.error || res.body.mcpResponse?.content?.[0]?.text || '').includes('lacks required scope'));
+  });
+
+  test('Multi-Hop Pipeline with Gate 1: Charlie is blocked at Turn 2 BigQuery (SCOPE_ESCALATION_DENIED)', async () => {
+    const charlieToken = mintKeycloakToken({
+      sub: 'charlie@example.com',
+      roles: ['auditor', 'Storage Blob Data Reader'],
+      scope: 'mcp:tool1 mcp:tool2' // Strictly lacks mcp:bigquery:query!
+    });
+
+    const res = await invokeApp(app, {
+      method: 'POST',
+      url: '/api/agent/chat',
+      headers: { Authorization: `Bearer ${charlieToken}` },
+      body: { prompt: 'Correlate Azure financial report from app1 with GCP BigQuery regional sales telemetry' }
+    });
+
+    assert.strictEqual(res.statusCode, 200);
+    // Turn 1 (Azure Storage) succeeded
+    assert.strictEqual(res.body.multiHopExecution.steps[0].status, 'SUCCESS');
+    // Turn 2 (BigQuery) halted due to Gate 1 Scope Escalation Denial
+    assert.strictEqual(res.body.multiHopExecution.steps[1].status, 'SCOPE_ESCALATION_DENIED');
+    assert.strictEqual(res.body.hopToHop.hop5_gcpMultiHopToken.status, 'DENIED_BY_POLICY');
+    assert.strictEqual(res.body.hopToHop.hop5_gcpMultiHopToken.code, 'SCOPE_ESCALATION_DENIED');
   });
 });
 

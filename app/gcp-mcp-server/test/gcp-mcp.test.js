@@ -223,6 +223,10 @@ test('GCP BigQuery MCP Server Test Suite (Spec 2026-07-15 & RFC 8693 Multi-Hop)'
     const contentJson = JSON.parse(res.body.result.content[0].text);
     assert.equal(contentJson.status, 'SUCCESS');
     assert.equal(contentJson.data.rows[0].data.totalRevenue, '$14,250,000');
+    assert.ok(contentJson.data.labels);
+    assert.equal(contentJson.data.labels.delegated_user, 'bob_example_com');
+    assert.equal(contentJson.data.labels.actor_orchestrator, 'orchestrator_sa');
+    assert.equal(contentJson.data.labels.trace_hop, '5');
   });
 
   await t.test('POST /mcp tools/call denies Bob on bigquery_audit_compliance (lacks mcp:bigquery:audit)', async () => {

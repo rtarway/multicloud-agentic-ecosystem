@@ -35,31 +35,31 @@ const USER_CONFIGS = {
     username: 'alice',
     password: 'Password123!',
     email: 'alice@rtarwaygmail.onmicrosoft.com',
-    displayName: 'Alice (Auditor / Storage Reader / Mail.Send)',
-    roles: ['admin', 'auditor', 'Storage Blob Data Reader', 'Mail.Send'],
-    scopes: ['mcp:tool1', 'mcp:tool2', 'Mail.Send'],
-    azureRole: 'Storage Blob Data Reader (app1 & app2) + Entra Mail.Send',
-    description: 'Authorized on Storage (app1 & app2) AND Microsoft Graph Mail.Send.'
+    displayName: 'Alice (Multi-Cloud Admin / Azure Storage & Graph + GCP BigQuery Query & Audit)',
+    roles: ['admin', 'auditor', 'Storage Blob Data Reader', 'Mail.Send', 'BigQuery.Admin'],
+    scopes: ['mcp:tool1', 'mcp:tool2', 'mcp:bigquery:query', 'mcp:bigquery:audit', 'Mail.Send'],
+    azureRole: 'Storage Blob Data Reader (app1 & app2) + Entra Mail.Send + GCP BigQuery Admin',
+    description: 'Full multi-cloud privileges: Azure Storage, Graph Mail.Send, and GCP BigQuery Query & Audit.'
   },
   bob: {
     username: 'bob',
     password: 'Password123!',
     email: 'bob@rtarwaygmail.onmicrosoft.com',
-    displayName: 'Bob (Data Contributor on app2 / No app1 Role)',
+    displayName: 'Bob (Analyst: Azure app2 + GCP BigQuery Sales Query)',
     roles: ['regular-user', 'Storage Blob Data Contributor'],
-    scopes: ['mcp:tool1'],
-    azureRole: 'Storage Blob Data Contributor (app2 ONLY; No app1 role; No Graph access)',
-    description: 'Contributor on app2 only. Blocked on app1 by Azure Storage Cloud IAM; No Graph access.'
+    scopes: ['mcp:tool1', 'mcp:bigquery:query'],
+    azureRole: 'Storage Contributor (app2) + GCP BigQuery Query (No Audit / No Graph)',
+    description: 'Contributor on app2 and BigQuery sales queries. Blocked on Azure app1, BigQuery audit, and Graph.'
   },
   charlie: {
     username: 'charlie',
     password: 'Password123!',
     email: 'charlie@rtarwaygmail.onmicrosoft.com',
-    displayName: 'Charlie (Storage Reader / NO Graph Mail.Send)',
+    displayName: 'Charlie (Azure-Only Auditor / ZERO BigQuery & Graph Scopes)',
     roles: ['auditor', 'Storage Blob Data Reader'],
     scopes: ['mcp:tool1', 'mcp:tool2'],
-    azureRole: 'Storage Blob Data Reader (app1 & app2) - Zero Microsoft Graph Permissions',
-    description: 'Storage reader on app1 & app2, but strictly lacks Microsoft Graph Mail.Send scope on Keycloak and Entra ID.'
+    azureRole: 'Storage Reader (app1 & app2) ONLY - Strictly Lacks BigQuery & Graph Scopes',
+    description: 'Azure storage auditor. Strictly lacks GCP BigQuery and Graph scopes. Demonstrates Gate 1 Fail-Closed.'
   }
 };
 // Backward compatibility alias

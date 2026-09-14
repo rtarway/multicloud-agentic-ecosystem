@@ -187,10 +187,16 @@ class TokenExchangeEngine {
       }
     }
 
-    // Determine Eligible Scopes for Principal
-    const userEligibleScopes = ['mcp:tool1', 'mcp:bigquery:query'];
+    // 1. Determine Eligible Scopes for Principal (Strict RFC 8693 Section 2.1 Intersection)
+    const userEligibleScopes = [];
+    if (isAdmin || userScopesFromToken.includes('mcp:tool1') || userRoles.includes('Storage Blob Data Reader') || userRoles.includes('Storage Blob Data Contributor') || userRoles.includes('regular-user')) {
+      userEligibleScopes.push('mcp:tool1');
+    }
     if (isAdmin || userScopesFromToken.includes('mcp:tool2')) {
       userEligibleScopes.push('mcp:tool2');
+    }
+    if (isAdmin || userScopesFromToken.includes('mcp:bigquery:query') || userRoles.includes('BigQuery.Admin') || userRoles.includes('BigQuery.User')) {
+      userEligibleScopes.push('mcp:bigquery:query');
     }
     if (isAdmin || userScopesFromToken.includes('mcp:bigquery:audit')) {
       userEligibleScopes.push('mcp:bigquery:audit');
@@ -200,9 +206,33 @@ class TokenExchangeEngine {
     }
 
     const isScopeAuthorized = userEligibleScopes.includes(requiredScopeForTool);
-    const downscopedScopes = isScopeAuthorized ? [requiredScopeForTool] : ['unauthorized'];
-    const finalScopes = downscopedScopes;
 
+    // GATE 1: Fail-Closed Enforcement of RFC 8693 Section 2.1 (No Scope Escalation)
+    if (!isScopeAuthorized) {
+      console.warn(`[ORCH-AUTH] ❌ RFC 8693 Scope Escalation Denied: Subject '${userEmail}' lacks required scope '${requiredScopeForTool}' in IdP token.`);
+      console.warn(`[ORCH-AUTH]    Granted IdP Scopes: [${userScopesFromToken.join(', ')}], Eligible Scopes: [${userEligibleScopes.join(', ')}]`);
+      return {
+        isError: true,
+        status: 'DENIED_BY_POLICY',
+        code: 'SCOPE_ESCALATION_DENIED',
+        error: `RFC 8693 Violation: Subject '${userEmail}' lacks required scope '${requiredScopeForTool}' in IdP token. Delegation halted.`,
+        requiredScope: requiredScopeForTool,
+        userEligibleScopes,
+        tokenType: 'TOKEN_EXCHANGE_DENIED',
+        audit: {
+          subject: userEmail,
+          actor: agentSvid?.spiffeId || 'spiffe://example.org/ns/agent-system/sa/orchestrator-sa',
+          userRoles,
+          eligibleScopes: userEligibleScopes,
+          requestedTool,
+          requiredScope: requiredScopeForTool,
+          decision: 'DENIED_BY_POLICY',
+          code: 'SCOPE_ESCALATION_DENIED'
+        }
+      };
+    }
+
+    const finalScopes = [requiredScopeForTool];
     const agentSpiffeId = agentSvid?.spiffeId || 'spiffe://example.org/ns/agent-system/sa/orchestrator-sa';
 
     // 2. Build RFC 8693 Recursive Actor Chain
@@ -216,14 +246,37 @@ class TokenExchangeEngine {
       cur = cur.act;
     }
 
-    // 3. If target is GCP, attempt Live Google Cloud STS Exchange (RFC 8693)
+    // 3. If target is GCP, attempt Live Google Cloud STS Exchange with Credential Access Boundary (Gate 2)
     if (isGcpTool || targetAudience === GCP_MCP_AUDIENCE || targetAudience.includes('googleapis.com')) {
+      const isAuditTool = requiredScopeForTool === 'mcp:bigquery:audit';
+      const targetDataset = isAuditTool ? 'audit_logs' : 'analytics_data';
+      const targetTable = isAuditTool ? 'access_audit' : 'regional_sales';
+
+      // GATE 2 (Pattern B): Google STS Credential Access Boundary (CAB)
+      const credentialAccessBoundary = {
+        accessBoundary: {
+          accessBoundaryRules: [
+            {
+              availableResource: `//bigquery.googleapis.com/projects/${GCP_PROJECT_NUMBER}/datasets/${targetDataset}/tables/${targetTable}`,
+              availablePermissions: [
+                isAuditTool ? 'inRole:roles/bigquery.admin' : 'inRole:roles/bigquery.dataViewer'
+              ],
+              availabilityCondition: {
+                title: 'TableAccessBoundary',
+                expression: `resource.name.startsWith('projects/${GCP_PROJECT_ID}/datasets/${targetDataset}')`
+              }
+            }
+          ]
+        }
+      };
+
       try {
         console.log(`\n=============================================================`);
-        console.log(`[ORCH-GCP-STS] 🌐 Calling Google Cloud STS Token Endpoint (RFC 8693):`);
+        console.log(`[ORCH-GCP-STS] 🌐 Calling Google Cloud STS Token Endpoint (RFC 8693 + CAB):`);
         console.log(`[ORCH-GCP-STS]   Audience:  ${GCP_STS_AUDIENCE}`);
         console.log(`[ORCH-GCP-STS]   Principal: ${userEmail}`);
         console.log(`[ORCH-GCP-STS]   Lineage:   [${actorChain.join(' -> ')}]`);
+        console.log(`[ORCH-GCP-STS]   CAB Scope: ${credentialAccessBoundary.accessBoundary.accessBoundaryRules[0].availableResource}`);
 
         const stsResponse = await this._callGoogleStsTokenExchange({
           grant_type: 'urn:ietf:params:oauth:grant-type:token-exchange',
@@ -231,18 +284,19 @@ class TokenExchangeEngine {
           scope: 'https://www.googleapis.com/auth/cloud-platform',
           requested_token_type: 'urn:ietf:params:oauth:token-type:access_token',
           subject_token_type: 'urn:ietf:params:oauth:token-type:jwt',
-          subject_token: userToken || 'mock-user-token'
+          subject_token: userToken || 'mock-user-token',
+          access_boundary: JSON.stringify(credentialAccessBoundary)
         });
 
         console.log(`[ORCH-GCP-STS] 📡 Google STS Response: HTTP ${stsResponse.statusCode}`);
         if (stsResponse.statusCode === 200 && stsResponse.body.access_token) {
-          console.log(`[ORCH-GCP-STS]   ✅ Federated Access Token minted by Google Cloud STS!`);
+          console.log(`[ORCH-GCP-STS]   ✅ CAB-Downscoped Access Token minted by Google Cloud STS!`);
         }
       } catch (err) {
         console.log(`[ORCH-GCP-STS] ℹ️ Google Cloud STS live call note: ${err.message}`);
       }
 
-      // Construct High-Fidelity Google Cloud IAM / RFC 8693 OBO Token
+      // Construct High-Fidelity Google Cloud IAM / RFC 8693 OBO Token with CAB
       const gcpClaims = {
         iss: 'https://accounts.google.com',
         aud: targetAudience || GCP_MCP_AUDIENCE,
@@ -256,11 +310,13 @@ class TokenExchangeEngine {
         actorChain,
         downscoped: true,
         cloudPlatform: 'GCP',
+        credentialAccessBoundary,
         google_cloud_iam: {
           projectId: GCP_PROJECT_ID,
           projectNumber: GCP_PROJECT_NUMBER,
           poolId: GCP_POOL_ID,
-          serviceAccount: GCP_SERVICE_ACCOUNT
+          serviceAccount: GCP_SERVICE_ACCOUNT,
+          cabResource: credentialAccessBoundary.accessBoundary.accessBoundaryRules[0].availableResource
         },
         delegationType: 'RFC8693_MULTI_HOP_CHAIN'
       };
@@ -271,6 +327,7 @@ class TokenExchangeEngine {
         exchangedToken,
         tokenType: 'GCP_IAM_RFC8693_DELEGATION',
         claims: gcpClaims,
+        credentialAccessBoundary,
         delegatedUser: {
           sub: userEmail,
           email: userEmail,
@@ -284,7 +341,8 @@ class TokenExchangeEngine {
           eligibleScopes: userEligibleScopes,
           grantedScopes: finalScopes,
           requestedTool,
-          tokenIssuer: 'Google Cloud IAM (GCP WIF / STS)'
+          tokenIssuer: 'Google Cloud IAM (GCP WIF / STS)',
+          credentialAccessBoundary
         }
       };
     }

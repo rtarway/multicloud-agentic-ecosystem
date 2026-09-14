@@ -750,6 +750,8 @@
                     <div class="claim-value claim-highlight" id="hop5-scope">Mail.Send</div>
                     <div class="claim-label" id="hop5-ttl-label">Token TTL:</div>
                     <div class="claim-value" id="hop5-ttl">300s (Short-Lived Downscoped)</div>
+                    <div class="claim-label" id="hop5-cab-label">IAM Access Boundary (CAB):</div>
+                    <div class="claim-value" id="hop5-cab" style="font-size: 11px; font-family: monospace; color: var(--success);"></div>
                     <div class="claim-label" id="hop5-act-label">RFC 8693 act Claim:</div>
                     <div class="claim-value">
                       <div class="claim-act-box" id="hop5-act-box">
@@ -1330,6 +1332,7 @@
             document.getElementById('hop5-aud').textContent = h5.aud || (isHop5Gcp ? 'gcp-bigquery-mcp-server' : 'https://graph.microsoft.com');
             document.getElementById('hop5-scope').textContent = isHop5Gcp ? 'mcp:bigquery:query (Halted)' : 'Mail.Send (Halted)';
             document.getElementById('hop5-ttl').textContent = 'N/A';
+            document.getElementById('hop5-cab').textContent = 'N/A (Pipeline Halted)';
             document.getElementById('hop5-act').textContent = 'Pipeline halted before secondary token exchange.';
             document.getElementById('hop5-decoded').textContent = JSON.stringify({ error: 'Token not minted' }, null, 2);
             document.getElementById('hop5-raw').textContent = 'N/A';
@@ -1343,6 +1346,9 @@
             document.getElementById('hop5-aud').textContent = h5.aud || (isHop5Gcp ? 'gcp-bigquery-mcp-server' : 'https://graph.microsoft.com');
             document.getElementById('hop5-scope').textContent = Array.isArray(h5.scope) ? h5.scope.join(' ') : (h5.scope || (isHop5Gcp ? 'mcp:bigquery:query' : 'Mail.Send'));
             document.getElementById('hop5-ttl').textContent = (h5.ttlSeconds || 300) + 's (Short-Lived Downscoped)';
+            document.getElementById('hop5-cab').textContent = isHop5Gcp 
+              ? (h5.decodedToken?.payload?.credentialAccessBoundary?.accessBoundary?.accessBoundaryRules?.[0]?.availableResource || 'analytics_data.regional_sales (Restricted by Google STS CAB)')
+              : 'N/A (Microsoft Graph API Scope Mail.Send)';
             document.getElementById('hop5-act').textContent = JSON.stringify(h5.act || {
               sub: 'spiffe://example.org/ns/agent-system/sa/orchestrator-sa',
               iss: 'https://spire.agent-system.svc.cluster.local',

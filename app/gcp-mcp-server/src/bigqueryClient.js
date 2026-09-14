@@ -19,11 +19,12 @@ class BigQueryClient {
   /**
    * Executes a live query via Google Cloud BigQuery REST API
    */
-  async _executeLiveBigQueryRest(query, accessToken) {
+  async _executeLiveBigQueryRest(query, accessToken, labels = {}) {
     const postData = JSON.stringify({
       query,
       useLegacySql: false,
-      timeoutMs: 15000
+      timeoutMs: 15000,
+      labels
     });
 
     const parsedUrl = new URL(`https://bigquery.googleapis.com/bigquery/v2/projects/${this.projectId}/queries`);
@@ -112,6 +113,13 @@ class BigQueryClient {
 
     console.log(`[GCP-BigQuery] 🔍 Executing query on dataset '${GCP_DATASET_ANALYTICS}' for principal '${sub}' (Region: ${region}, Metric: ${metric})...`);
 
+    const jobLabels = {
+      delegated_user: (authContext.email || sub || 'unknown').replace(/[^a-z0-9_-]/gi, '_').toLowerCase(),
+      actor_orchestrator: 'orchestrator_sa',
+      trace_hop: '5',
+      tool_name: 'bigquery_query_sales'
+    };
+
     const liveToken = await this._getLiveAccessToken(authContext);
 
     // If live mode is explicitly enabled and token is provided, execute against live Google Cloud
@@ -119,7 +127,7 @@ class BigQueryClient {
       try {
         console.log(`[GCP-BigQuery] 🌐 Executing LIVE query against Google BigQuery in project '${this.projectId}'...`);
         const sql = `SELECT quarter, region, total_revenue, active_accounts, churn_risk FROM \`${this.projectId}.${GCP_DATASET_ANALYTICS}.regional_sales\` WHERE region = '${region}' LIMIT 10`;
-        const bqResult = await this._executeLiveBigQueryRest(sql, liveToken);
+        const bqResult = await this._executeLiveBigQueryRest(sql, liveToken, jobLabels);
 
         const rows = (bqResult.rows || []).map(r => ({
           quarter: r.f[0]?.v,
@@ -134,6 +142,7 @@ class BigQueryClient {
           projectId: this.projectId,
           dataset: GCP_DATASET_ANALYTICS,
           table: 'regional_sales',
+          labels: jobLabels,
           cacheHit: bqResult.cacheHit || false,
           totalBytesProcessed: parseInt(bqResult.totalBytesProcessed || '0', 10),
           executionMode: 'LIVE_GOOGLE_CLOUD',
@@ -208,6 +217,7 @@ class BigQueryClient {
       projectId: this.projectId,
       dataset: GCP_DATASET_ANALYTICS,
       table: 'regional_sales',
+      labels: jobLabels,
       cacheHit: false,
       totalBytesProcessed: 18450020,
       totalBytesBilled: 20971520,

@@ -146,3 +146,27 @@ npm run test:gcp-mcp
 # Run the CLI multi-cloud demo
 ./scripts/run-demo.sh
 ```
+
+---
+
+## 6. Audit Lineage & Job Labeling (NIST SP 800-53 AU-2 / AU-3)
+
+When agentic operations run against BigQuery under a delegated Service Account (`gcp-mcp-sa`), Cloud Audit Logs attribute the operation to the Service Account. To satisfy enterprise compliance and non-repudiation:
+
+1. **Job Configuration Labels**: Every BigQuery query job configuration is tagged with metadata:
+   ```json
+   {
+     "labels": {
+       "delegated_user": "alice_at_rtarwaygmail_onmicrosoft_com",
+       "actor_orchestrator": "orchestrator_sa",
+       "trace_hop": "5",
+       "tool_name": "bigquery_query_sales"
+     }
+   }
+   ```
+2. **Cloud Audit Log Correlation**: In GCP Cloud Logging, queries can be filtered by:
+   ```text
+   resource.type="bigquery_project"
+   protoPayload.serviceData.jobCompletedEvent.job.jobConfiguration.labels.delegated_user="alice_at_rtarwaygmail_onmicrosoft_com"
+   ```
+   This bridges the gap between machine execution and human user accountability.

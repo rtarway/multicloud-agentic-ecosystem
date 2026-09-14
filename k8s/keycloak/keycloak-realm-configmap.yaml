@@ -71,6 +71,16 @@ data:
           "name": "mcp:tool2",
           "description": "Scope permitting access to tool2 (app1 read-only audit)",
           "protocol": "openid-connect"
+        },
+        {
+          "name": "mcp:bigquery:query",
+          "description": "Scope permitting query access to BigQuery analytics dataset",
+          "protocol": "openid-connect"
+        },
+        {
+          "name": "mcp:bigquery:audit",
+          "description": "Scope permitting audit access to BigQuery compliance dataset",
+          "protocol": "openid-connect"
         }
       ],
       "scopeMappings": [
@@ -83,6 +93,19 @@ data:
         },
         {
           "clientScope": "mcp:tool2",
+          "roles": [
+            "admin"
+          ]
+        },
+        {
+          "clientScope": "mcp:bigquery:query",
+          "roles": [
+            "admin",
+            "regular-user"
+          ]
+        },
+        {
+          "clientScope": "mcp:bigquery:audit",
           "roles": [
             "admin"
           ]

@@ -442,3 +442,31 @@ unzip -p /tmp/azure_logs.zip 'LogFiles/*_default_docker.log' | grep 'MCP'
 For an in-depth evaluation of whether users should have direct Azure Service Principals and Azure Storage ACLs versus the Application-Enforced Delegated Gateway pattern, refer to:
 - [docs/storage-access-and-identity-analysis.md](file:///Users/rtarway/mygithubprojects/azure-wif-poc/docs/storage-access-and-identity-analysis.md)
 
+---
+
+## 8. Multi-Cloud Triple-Lock Delegation: Combined Pattern A+B
+
+To scale cross-cloud agentic execution securely across Microsoft Azure and Google Cloud Platform, the system implements the **Triple-Lock Security Model**:
+
+```
+[Human User] 
+     │
+     ▼ (Gate 1: RFC 8693 Section 2.1 Scope Downscoping)
+[Keycloak IdP: Functional Capability Consent (mcp:bigquery:query)]
+     │
+     ▼ (Gate 2: Physical IAM Kernel Restriction)
+[Google STS: OAuth 2.0 Credential Access Boundary (CAB) Token]
+     │
+     ▼ (Gate 3: Ingress, Declarative Policy & Audit Stamping)
+[Google Cloud MCP Server: Parameter Validation + BigQuery Job Labels]
+     │
+     ▼
+[Google Cloud BigQuery: Query Executed on regional_sales table ONLY]
+```
+
+### Architectural Principles:
+1. **Tool-Level Consent vs. Cloud Console Access**: Users possess business consent in the IdP (`mcp:bigquery:query`), eliminating the need to provision thousands of analysts directly into Google Cloud IAM or Azure IAM.
+2. **Deterministic RFC 8693 Fail-Closed Enforcement**: If an unauthorized user (e.g. Charlie) attempts to call BigQuery, the pipeline terminates at Gate 1 with `SCOPE_ESCALATION_DENIED` before any cloud token exchange occurs.
+3. **Physical Machine Bounding (CAB)**: The Service Account (`gcp-mcp-sa`) cannot be abused as a Confused Deputy because Google STS bounds the runtime token strictly to `analytics_data.regional_sales`.
+4. **Audit Non-Repudiation (NIST SP 800-53)**: The human user `sub` is stamped onto BigQuery Query Job Labels, ensuring GCP Cloud Audit Logs record the true human origin.
+

@@ -354,15 +354,27 @@ app.post('/api/agent/chat', async (req, res) => {
         turn: 2
       });
 
-      const step2CorrelationId = 'chain-cross-step2-' + (userClaims.email || userClaims.sub || 'user').replace(/[^a-zA-Z0-9]/g, '-') + '-' + crypto.randomUUID().substring(0, 8);
-      step2GcpRes = await callGcpMcpServer(
-        GCP_MCP_SERVER_URL,
-        step2.tool,
-        step2.arguments,
-        step2Exchange.exchangedToken,
-        step2Exchange.delegatedUser,
-        step2CorrelationId
-      );
+      if (step2Exchange.isError || step2Exchange.status === 'DENIED_BY_POLICY') {
+        console.warn(`[ORCH-EXEC] ❌ Turn 2 Scope Escalation Denied: ${step2Exchange.error}`);
+        step2GcpRes = {
+          isError: true,
+          content: [{ type: 'text', text: `Token Exchange Policy Denial: ${step2Exchange.error}` }],
+          cloudIAMDecision: 'SCOPE_ESCALATION_DENIED',
+          audit: step2Exchange.audit
+        };
+        halted = true;
+        finalError = step2GcpRes;
+      } else {
+        const step2CorrelationId = 'chain-cross-step2-' + (userClaims.email || userClaims.sub || 'user').replace(/[^a-zA-Z0-9]/g, '-') + '-' + crypto.randomUUID().substring(0, 8);
+        step2GcpRes = await callGcpMcpServer(
+          GCP_MCP_SERVER_URL,
+          step2.tool,
+          step2.arguments,
+          step2Exchange.exchangedToken,
+          step2Exchange.delegatedUser,
+          step2CorrelationId
+        );
+      }
 
       const step2Status = step2GcpRes.isError ? (step2GcpRes.cloudIAMDecision || 'FAILED') : 'SUCCESS';
       const step2Record = {
@@ -371,8 +383,8 @@ app.post('/api/agent/chat', async (req, res) => {
         name: step2.name,
         tool: step2.tool,
         targetResource: 'analytics_data/regional_sales',
-        token: step2Exchange.exchangedToken,
-        decodedToken: decodeTokenComplete(step2Exchange.exchangedToken),
+        token: step2Exchange.exchangedToken || null,
+        decodedToken: step2Exchange.exchangedToken ? decodeTokenComplete(step2Exchange.exchangedToken) : null,
         mcpResponse: step2GcpRes,
         status: step2Status
       };
@@ -523,33 +535,46 @@ app.post('/api/agent/chat', async (req, res) => {
         decodedToken: step1McpRes,
         response: step1McpRes
       },
-      hop5_gcpMultiHopToken: step2Exchange ? {
-        name: 'Hop 5: RFC 8693 Multi-Hop Recursive Token (Turn 2 -> GCP BigQuery MCP)',
-        cloud: 'GCP',
-        tokenType: 'Google Cloud IAM / RFC 8693 Delegated Token',
-        issuer: 'Google Cloud IAM (https://accounts.google.com)',
-        sub: step2Exchange.claims.sub,
-        aud: step2Exchange.claims.aud,
-        scope: step2Exchange.claims.roles || step2Exchange.claims.scope,
-        act: step2Exchange.claims.act,
-        actorChain: step2Exchange.claims.actorChain,
-        delegationType: 'RFC8693_MULTI_HOP_CHAIN',
-        signatureStatus: 'VALID_CRYPTOGRAPHIC_CHAIN',
-        ttlSeconds: 300,
-        rawToken: step2Exchange.exchangedToken,
-        decodedToken: decodeTokenComplete(step2Exchange.exchangedToken),
-        fullTokenClaims: step2Exchange.claims
-      } : null,
+      hop5_gcpMultiHopToken: step2Exchange ? (
+        step2Exchange.status === 'DENIED_BY_POLICY' ? {
+          name: 'Hop 5: RFC 8693 Multi-Hop Recursive Token (Turn 2 -> GCP BigQuery MCP)',
+          cloud: 'GCP',
+          status: 'DENIED_BY_POLICY',
+          reason: step2Exchange.error,
+          code: step2Exchange.code,
+          tokenType: 'TOKEN_EXCHANGE_DENIED',
+          issuer: 'Google Cloud IAM (Blocked by Gate 1 Scope Policy)',
+          rawToken: null,
+          decodedToken: { error: step2Exchange.error, code: step2Exchange.code, requiredScope: step2Exchange.requiredScope }
+        } : {
+          name: 'Hop 5: RFC 8693 Multi-Hop Recursive Token (Turn 2 -> GCP BigQuery MCP)',
+          cloud: 'GCP',
+          tokenType: 'Google Cloud IAM / RFC 8693 Delegated Token',
+          issuer: 'Google Cloud IAM (https://accounts.google.com)',
+          sub: step2Exchange.claims.sub,
+          aud: step2Exchange.claims.aud,
+          scope: step2Exchange.claims.roles || step2Exchange.claims.scope,
+          act: step2Exchange.claims.act,
+          actorChain: step2Exchange.claims.actorChain,
+          delegationType: 'RFC8693_MULTI_HOP_CHAIN',
+          signatureStatus: 'VALID_CRYPTOGRAPHIC_CHAIN',
+          credentialAccessBoundary: step2Exchange.credentialAccessBoundary,
+          ttlSeconds: 300,
+          rawToken: step2Exchange.exchangedToken,
+          decodedToken: decodeTokenComplete(step2Exchange.exchangedToken),
+          fullTokenClaims: step2Exchange.claims
+        }
+      ) : null,
       hop5_graphToken: step2Exchange ? {
         name: 'Hop 5: RFC 8693 Multi-Hop Recursive Token (Turn 2 -> GCP BigQuery MCP)',
         cloud: 'GCP',
         tokenType: 'Google Cloud IAM / RFC 8693 Delegated Token',
         issuer: 'Google Cloud IAM (https://accounts.google.com)',
-        sub: step2Exchange.claims.sub,
-        aud: step2Exchange.claims.aud,
-        scope: step2Exchange.claims.roles || step2Exchange.claims.scope,
-        act: step2Exchange.claims.act,
-        actorChain: step2Exchange.claims.actorChain,
+        sub: step2Exchange.claims?.sub,
+        aud: step2Exchange.claims?.aud,
+        scope: step2Exchange.claims?.roles || step2Exchange.claims?.scope,
+        act: step2Exchange.claims?.act,
+        actorChain: step2Exchange.claims?.actorChain,
         delegationType: 'RFC8693_MULTI_HOP_CHAIN',
         signatureStatus: 'VALID_CRYPTOGRAPHIC_CHAIN',
         ttlSeconds: 300,
@@ -827,10 +852,12 @@ app.post('/api/agent/chat', async (req, res) => {
         });
 
         // Verify caller has Mail.Send permission
-        const hasMailSend = (step4Exchange.claims.roles || []).includes('Mail.Send') ||
-          ((step4Exchange.claims.scope || '').split(' ').includes('Mail.Send')) ||
-          ((userClaims.scope || '').split(' ').includes('Mail.Send')) ||
-          (userClaims.roles || []).includes('Mail.Send');
+        const hasMailSend = !step4Exchange?.isError && (
+          (step4Exchange?.claims?.roles || []).includes('Mail.Send') ||
+          ((step4Exchange?.claims?.scope || '').split(' ').includes('Mail.Send')) ||
+          ((userClaims?.scope || '').split(' ').includes('Mail.Send')) ||
+          (userClaims?.roles || []).includes('Mail.Send')
+        );
 
         if (!hasMailSend) {
           const authDenial = {
@@ -849,8 +876,8 @@ app.post('/api/agent/chat', async (req, res) => {
             name: step4.name,
             tool: 'microsoft_graph_direct',
             status: 'DENIED_BY_POLICY',
-            token: step4Exchange.exchangedToken,
-            decodedToken: decodeTokenComplete(step4Exchange.exchangedToken),
+            token: step4Exchange?.exchangedToken || null,
+            decodedToken: step4Exchange?.exchangedToken ? decodeTokenComplete(step4Exchange.exchangedToken) : null,
             mcpResponse: authDenial
           });
           conversationalTurns.push({
@@ -862,8 +889,8 @@ app.post('/api/agent/chat', async (req, res) => {
             tokenExchange: {
               targetAudience: 'https://graph.microsoft.com',
               requiredScope: 'Mail.Send',
-              token: step4Exchange.exchangedToken,
-              decoded: decodeTokenComplete(step4Exchange.exchangedToken)
+              token: step4Exchange?.exchangedToken || null,
+              decoded: step4Exchange?.exchangedToken ? decodeTokenComplete(step4Exchange.exchangedToken) : null
             },
             invokedTarget: 'Microsoft Graph API (Blocked: Principal lacks Mail.Send)',
             recipient: targetRecipient,
@@ -996,14 +1023,14 @@ app.post('/api/agent/chat', async (req, res) => {
           app2: step2McpRes ? { status: step2McpRes.isError ? (step2McpRes.cloudIAMDecision || 'FAILED') : 'SUCCESS', resource: '/app2/customer-metrics.json' } : null
         }
       },
-      hop5_graphToken: step4Exchange ? {
+      hop5_graphToken: (step4Exchange && !step4Exchange.isError) ? {
         name: 'Hop 5: RFC 8693 Downscoped Delegated Token (Orchestrator ➔ Microsoft Graph)',
         tokenType: 'RFC 8693 Delegated Access Token',
-        sub: step4Exchange.claims.sub,
-        aud: step4Exchange.claims.aud || 'https://graph.microsoft.com',
-        scope: step4Exchange.claims.roles || step4Exchange.claims.scope || 'Mail.Send',
+        sub: step4Exchange.claims?.sub,
+        aud: step4Exchange.claims?.aud || 'https://graph.microsoft.com',
+        scope: step4Exchange.claims?.roles || step4Exchange.claims?.scope || 'Mail.Send',
         ttlSeconds: 300,
-        act: step4Exchange.claims.act,
+        act: step4Exchange.claims?.act,
         delegationType: 'RFC8693_GRAPH_TOKEN_EXCHANGE',
         signatureStatus: 'VALID_CRYPTOGRAPHIC_CHAIN',
         rawToken: step4Exchange.exchangedToken,
@@ -1011,7 +1038,9 @@ app.post('/api/agent/chat', async (req, res) => {
         fullTokenClaims: step4Exchange.claims
       } : {
         name: 'Hop 5: RFC 8693 Downscoped Delegated Token (Microsoft Graph)',
-        status: halted ? 'NOT_EVALUATED_HALTED_EARLIER' : 'NOT_MINTED'
+        status: step4Exchange?.isError ? 'DENIED_BY_POLICY' : (halted ? 'NOT_EVALUATED_HALTED_EARLIER' : 'NOT_MINTED'),
+        code: step4Exchange?.code,
+        error: step4Exchange?.error
       },
       hop6_graphExecution: step4DirectRes ? {
         name: 'Hop 6: Microsoft Graph API Direct Execution (Orchestrator ➔ Graph API)',
@@ -1080,10 +1109,10 @@ app.post('/api/agent/chat', async (req, res) => {
     requestedTool: plan.plannedTool
   });
 
-  let targetToken = exchangeResult.exchangedToken;
+  let targetToken = exchangeResult.exchangedToken || null;
 
   // If testing rogue actor injection scenario, tamper with the act claim
-  if (req.body.context?.simulate_rogue_actor || prompt.toLowerCase().includes('rogue actor') || prompt.toLowerCase().includes('tamper')) {
+  if (targetToken && (req.body.context?.simulate_rogue_actor || prompt.toLowerCase().includes('rogue actor') || prompt.toLowerCase().includes('tamper'))) {
     const tamperedClaims = {
       ...exchangeResult.claims,
       act: {
@@ -1098,27 +1127,44 @@ app.post('/api/agent/chat', async (req, res) => {
   const correlationId = 'chain-' + (userClaims.email || userClaims.sub || 'user').replace(/[^a-zA-Z0-9]/g, '-') + '-' + crypto.randomUUID().substring(0, 8);
 
   // 6. Invoke Target MCP Server (Azure Storage or GCP BigQuery) with Downscoped Token
-  const mcpResponse = isGcp
-    ? await callGcpMcpServer(
-        GCP_MCP_SERVER_URL,
-        plan.plannedTool,
-        plan.arguments,
-        targetToken,
-        exchangeResult.delegatedUser,
-        correlationId
-      )
-    : await callMcpServer(
-        MCP_SERVER_URL,
-        plan.plannedTool,
-        plan.arguments,
-        targetToken,
-        exchangeResult.delegatedUser,
-        correlationId
-      );
+  let mcpResponse;
+  if (exchangeResult.isError) {
+    mcpResponse = {
+      isError: true,
+      code: exchangeResult.code || 'SCOPE_ESCALATION_DENIED',
+      audit: exchangeResult.audit || {
+        principal: userClaims.email || userClaims.sub,
+        actingAgent: agentSvid.spiffeId,
+        requestedTool: plan.plannedTool,
+        requiredScope: exchangeResult.requiredScope,
+        decision: 'DENIED_BY_POLICY',
+        code: exchangeResult.code || 'SCOPE_ESCALATION_DENIED'
+      },
+      content: [{ type: 'text', text: exchangeResult.error }]
+    };
+  } else {
+    mcpResponse = isGcp
+      ? await callGcpMcpServer(
+          GCP_MCP_SERVER_URL,
+          plan.plannedTool,
+          plan.arguments,
+          targetToken,
+          exchangeResult.delegatedUser,
+          correlationId
+        )
+      : await callMcpServer(
+          MCP_SERVER_URL,
+          plan.plannedTool,
+          plan.arguments,
+          targetToken,
+          exchangeResult.delegatedUser,
+          correlationId
+        );
+  }
 
-  const decodedObo = jwtUtil.decode(targetToken) || exchangeResult.claims;
+  const decodedObo = targetToken ? (jwtUtil.decode(targetToken) || exchangeResult.claims) : (exchangeResult.claims || null);
   const decodedUser = userToken ? jwtUtil.decode(userToken) : null;
-  const chainHash = crypto.createHash('sha256').update(targetToken).digest('hex').substring(0, 16);
+  const chainHash = targetToken ? crypto.createHash('sha256').update(targetToken).digest('hex').substring(0, 16) : 'none';
 
   let storageDelegationDetails = null;
   try {
@@ -1162,35 +1208,38 @@ app.post('/api/agent/chat', async (req, res) => {
         : 'Hop 3: RFC 8693 Downscoped Delegated Token (Orchestrator -> MCP Server)',
       tokenType: 'RFC 8693 Delegated Access Token',
       cloud: isGcp ? 'GCP' : 'Azure',
-      sub: decodedObo?.sub,
-      aud: decodedObo?.aud,
-      scope: decodedObo?.scope || decodedObo?.roles,
-      ttlSeconds: 300,
+      status: exchangeResult.isError ? 'DENIED_BY_POLICY' : 'SUCCESS',
+      code: exchangeResult.code,
+      error: exchangeResult.error,
+      sub: decodedObo?.sub || userClaims.sub,
+      aud: decodedObo?.aud || targetAudience,
+      scope: exchangeResult.isError ? 'NONE (SCOPE_ESCALATION_DENIED)' : (decodedObo?.scope || decodedObo?.roles),
+      ttlSeconds: exchangeResult.isError ? 0 : 300,
       act: decodedObo?.act, // The cryptographically nested actor claim!
       delegationType: isGcp ? 'RFC8693_GCP_TOKEN_EXCHANGE' : 'RFC8693_TOKEN_EXCHANGE',
-      signatureStatus: decodedObo?.act?.sub?.includes('untrusted') ? 'UNTRUSTED_ACTOR_REJECTED' : 'VALID_CRYPTOGRAPHIC_CHAIN',
-      rawToken: targetToken,
-      decodedToken: decodeTokenComplete(targetToken),
-      fullTokenClaims: decodedObo
+      signatureStatus: exchangeResult.isError ? 'TOKEN_EXCHANGE_DENIED' : (decodedObo?.act?.sub?.includes('untrusted') ? 'UNTRUSTED_ACTOR_REJECTED' : 'VALID_CRYPTOGRAPHIC_CHAIN'),
+      rawToken: targetToken || 'NONE (DENIED_BY_POLICY)',
+      decodedToken: targetToken ? decodeTokenComplete(targetToken) : { error: exchangeResult.error, code: exchangeResult.code },
+      fullTokenClaims: decodedObo || { error: exchangeResult.error }
     },
     hop4_storageDelegation: {
       name: isGcp ? 'Hop 4: Google Cloud BigQuery Execution' : 'Hop 4: JIT User-Delegation Token (MCP Server -> Azure Storage)',
       credentialType: isGcp ? 'GCP IAM / BigQuery Parameterized Execution' : 'OAuth 2.0 User-Delegation SAS / Bearer (60s JIT)',
       cloud: isGcp ? 'GCP' : 'Azure',
-      ttlSeconds: 60,
+      ttlSeconds: exchangeResult.isError ? 0 : 60,
       resource: plan.arguments ? (isGcp ? `${plan.arguments.dataset || 'analytics_data'}/${plan.arguments.table || 'regional_sales'}` : `/${plan.arguments.container}/${plan.arguments.filename}`) : undefined,
       storageAccount: isGcp ? 'gcp-bigquery-dataset' : 'azwifstoragepocrt',
       correlationId: correlationId,
-      chainBinding: `SHA256(${chainHash}...)`,
-      cloudIamStatus: mcpResponse.isError ? (mcpResponse.cloudIAMDecision || 'DENIED_BY_POLICY') : 'ALLOWED (HTTP 200)',
-      rawToken: isGcp ? 'Google BigQuery API Query Complete' : `Bearer 60s-ephemeral-sig-${chainHash}`,
+      chainBinding: exchangeResult.isError ? 'NONE (NOT_INVOKED)' : `SHA256(${chainHash}...)`,
+      cloudIamStatus: exchangeResult.isError ? 'NOT_INVOKED (TOKEN_EXCHANGE_DENIED)' : (mcpResponse.isError ? (mcpResponse.cloudIAMDecision || 'DENIED_BY_POLICY') : 'ALLOWED (HTTP 200)'),
+      rawToken: exchangeResult.isError ? 'NOT_INVOKED' : (isGcp ? 'Google BigQuery API Query Complete' : `Bearer 60s-ephemeral-sig-${chainHash}`),
       decodedToken: storageDelegationDetails || {
         credentialType: isGcp ? 'GCP_BIGQUERY_IAM_CREDENTIAL' : 'JIT_USER_DELEGATION_CREDENTIAL',
         resource: plan.arguments ? (isGcp ? `${plan.arguments.dataset || 'analytics_data'}` : `/${plan.arguments.container}/${plan.arguments.filename}`) : undefined,
-        ttlSeconds: 60,
+        ttlSeconds: exchangeResult.isError ? 0 : 60,
         correlationId,
         chainFingerprint: chainHash,
-        status: mcpResponse.isError ? (mcpResponse.cloudIAMDecision || 'DENIED') : 'ALLOWED (HTTP 200)'
+        status: exchangeResult.isError ? 'NOT_INVOKED' : (mcpResponse.isError ? (mcpResponse.cloudIAMDecision || 'DENIED') : 'ALLOWED (HTTP 200)')
       }
     }
   };
@@ -1206,18 +1255,20 @@ app.post('/api/agent/chat', async (req, res) => {
     },
     opaPolicy: opaResult,
     oboExchange: {
-      subject: exchangeResult.delegatedUser?.sub || exchangeResult.claims.sub,
-      actor: decodedObo?.act?.sub || exchangeResult.audit.actor,
-      delegationType: 'RFC8693_TOKEN_EXCHANGE',
-      downscopedScopes: exchangeResult.claims.roles || exchangeResult.claims.scope,
+      subject: exchangeResult.delegatedUser?.sub || exchangeResult.claims?.sub || userClaims.sub,
+      actor: decodedObo?.act?.sub || exchangeResult.audit?.actor || agentSvid.spiffeId,
+      delegationType: isGcp ? 'RFC8693_GCP_TOKEN_EXCHANGE' : 'RFC8693_TOKEN_EXCHANGE',
+      downscopedScopes: exchangeResult.claims?.roles || exchangeResult.claims?.scope || exchangeResult.requiredScope,
       actClaim: decodedObo?.act,
       tokenType: exchangeResult.tokenType,
-      tokenPreview: targetToken.slice(0, 35) + '...'
+      tokenPreview: targetToken ? (targetToken.slice(0, 35) + '...') : 'NONE (EXCHANGE_DENIED)'
     },
     hopToHop,
     plan,
     mcpResponse,
-    status: mcpResponse.isError ? 'FAILED_POLICY_CHECK' : 'COMPLETED_SUCCESSFULLY'
+    code: exchangeResult.isError ? exchangeResult.code : undefined,
+    error: exchangeResult.isError ? exchangeResult.error : undefined,
+    status: (exchangeResult.isError || mcpResponse.isError) ? 'FAILED_POLICY_CHECK' : 'COMPLETED_SUCCESSFULLY'
   };
 
   return res.json(responsePayload);
