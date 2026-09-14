@@ -15,7 +15,7 @@ const PROTOCOL_VERSION = process.env.MCP_PROTOCOL_VERSION || '2026-07-15';
 const engine = new DeclarativeEngine();
 
 // Health probe for Cloud Run, GKE, and local Kubernetes
-app.get('/healthz', (req, res) => {
+const healthHandler = (req, res) => {
   res.json({
     status: 'UP',
     platform: 'Google Cloud Run / GKE Container',
@@ -23,7 +23,11 @@ app.get('/healthz', (req, res) => {
     protocolVersion: PROTOCOL_VERSION,
     toolsRegistered: engine.listTools().length
   });
-});
+};
+
+app.get('/health', healthHandler);
+app.get('/healthz', healthHandler);
+app.get('/', healthHandler);
 
 // MCP JSON-RPC 2.0 Endpoint
 app.post('/mcp', async (req, res) => {
@@ -157,9 +161,9 @@ app.post('/api/tools/:name', async (req, res) => {
 });
 
 if (require.main === module) {
-  app.listen(PORT, () => {
+  app.listen(PORT, '0.0.0.0', () => {
     console.log(`===========================================================`);
-    console.log(` GCP BigQuery Low-Code MCP Server listening on ${PORT}`);
+    console.log(` GCP BigQuery Low-Code MCP Server listening on 0.0.0.0:${PORT}`);
     console.log(` Protocol Version: ${PROTOCOL_VERSION} (July 2026)`);
     console.log(` Cloud Platform: Google Cloud Platform (BigQuery)`);
     console.log(`===========================================================`);

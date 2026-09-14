@@ -3,12 +3,13 @@
 // Integrates with GCP IAM RBAC and Credential Access Boundaries (CAB)
 
 const https = require('https');
+const http = require('http');
 const fs = require('fs');
 
 const GCP_PROJECT_ID = process.env.GCP_PROJECT_ID || 'wifdemoproject-507002';
 const GCP_DATASET_ANALYTICS = process.env.GCP_DATASET_ANALYTICS || 'analytics_data';
 const GCP_DATASET_AUDIT = process.env.GCP_DATASET_AUDIT || 'audit_logs';
-const GCP_LIVE_MODE = process.env.GCP_LIVE_MODE === 'true';
+const GCP_LIVE_MODE = process.env.GCP_LIVE_MODE !== 'false';
 
 class BigQueryClient {
   constructor() {
@@ -68,14 +69,38 @@ class BigQueryClient {
   /**
    * Retrieves an access token for live GCP calls
    */
-  _getLiveAccessToken(authContext = {}) {
+  async _getLiveAccessToken(authContext = {}) {
     if (process.env.GCP_ACCESS_TOKEN) {
       return process.env.GCP_ACCESS_TOKEN;
     }
     if (authContext.gcpAccessToken) {
       return authContext.gcpAccessToken;
     }
-    return null;
+    // Automatically retrieve token from Cloud Run / GCP metadata service if available
+    try {
+      return await new Promise((resolve) => {
+        const req = http.get(
+          'http://metadata.google.internal/computeMetadata/v1/instance/service-accounts/default/token',
+          { headers: { 'Metadata-Flavor': 'Google' }, timeout: 1500 },
+          res => {
+            let data = '';
+            res.on('data', chunk => (data += chunk));
+            res.on('end', () => {
+              try {
+                const parsed = JSON.parse(data);
+                resolve(parsed.access_token || null);
+              } catch {
+                resolve(null);
+              }
+            });
+          }
+        );
+        req.on('error', () => resolve(null));
+        req.on('timeout', () => { req.destroy(); resolve(null); });
+      });
+    } catch {
+      return null;
+    }
   }
 
   /**
@@ -87,7 +112,7 @@ class BigQueryClient {
 
     console.log(`[GCP-BigQuery] 🔍 Executing query on dataset '${GCP_DATASET_ANALYTICS}' for principal '${sub}' (Region: ${region}, Metric: ${metric})...`);
 
-    const liveToken = this._getLiveAccessToken(authContext);
+    const liveToken = await this._getLiveAccessToken(authContext);
 
     // If live mode is explicitly enabled and token is provided, execute against live Google Cloud
     if (GCP_LIVE_MODE && liveToken) {

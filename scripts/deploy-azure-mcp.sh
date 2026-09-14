@@ -140,7 +140,6 @@ az webapp config appsettings set \
     PORT=8080 \
     WEBSITES_PORT=8080 \
     SCM_DO_BUILD_DURING_DEPLOYMENT=false \
-    WEBSITE_RUN_FROM_PACKAGE=1 \
     MCP_PROTOCOL_VERSION="2026-07-15" \
     AZURE_STORAGE_ACCOUNT="$STORAGE_ACCOUNT" \
     JWT_SECRET="${JWT_SECRET:-demo-obo-token-secret-key-2026}" \

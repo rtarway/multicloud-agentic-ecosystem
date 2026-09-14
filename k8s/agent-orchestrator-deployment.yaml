@@ -4,8 +4,9 @@ metadata:
   name: agent-config
   namespace: agent-system
 data:
-  # Default points to local in-cluster MCP server; automatically updated when Azure MCP server is deployed
-  MCP_SERVER_URL: "http://mcp-service.agent-system.svc.cluster.local:8080"
+  # Cloud-Hosted MCP Endpoints (Azure App Service & Google Cloud Run)
+  MCP_SERVER_URL: "https://az-mcp-server-ea223e.azurewebsites.net/mcp"
+  GCP_MCP_SERVER_URL: "https://gcp-mcp-server-ur5vhsneiq-uc.a.run.app/mcp"
 ---
 apiVersion: v1
 kind: ServiceAccount
@@ -52,7 +53,11 @@ spec:
                   key: MCP_SERVER_URL
                   optional: true
             - name: GCP_MCP_SERVER_URL
-              value: "http://gcp-mcp-service.agent-system.svc.cluster.local:8081/mcp"
+              valueFrom:
+                configMapKeyRef:
+                  name: agent-config
+                  key: GCP_MCP_SERVER_URL
+                  optional: true
             - name: GCP_PROJECT_ID
               value: "wifdemoproject-507002"
             - name: GCP_PROJECT_NUMBER
