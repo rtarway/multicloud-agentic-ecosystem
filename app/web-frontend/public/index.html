@@ -115,6 +115,8 @@
     .tag-spiffe { background: #8b5cf6; color: white; }
     .tag-rfc8693 { background: #10b981; color: white; }
     .tag-azure { background: #0284c7; color: white; }
+    .tag-gcp { background: #ea4335; color: white; }
+    .tag-multicloud { background: #8b5cf6; color: white; }
     
     .claim-grid { display: grid; grid-template-columns: 140px 1fr; gap: 6px; font-size: 12px; margin-bottom: 6px; }
     .claim-label { color: var(--text-muted); font-weight: 500; }
@@ -506,7 +508,7 @@
                 <div>🚫 <b>Scenario G (3rd User Charlie: NO Graph Permission)</b>: Charlie executes pipeline without Mail.Send</div>
                 <div class="desc">App1 (✅ 200) ➔ App2 (✅ 200) ➔ Redaction (✅) ➔ <b style="color:var(--danger)">Graph API Blocked: 403 Forbidden (Zero Email Sent)</b></div>
               </button>
-              <button class="quick-btn" style="border-left: 4px solid var(--purple); background: rgba(168, 85, 247, 0.08);" onclick="setPrompt('Correlate Azure financial report from app1 with GCP BigQuery regional sales telemetry')">
+              <button class="quick-btn" style="border-left: 4px solid var(--purple); background: rgba(168, 85, 247, 0.08);" onclick="loginAndRunCrossCloud('alice')">
                 <div>🌐 <b>Scenario H (Multi-Cloud Cross-Cloud Pipeline)</b>: Correlate Azure Storage + GCP BigQuery</div>
                 <div class="desc">Azure app1 (Hop 1) ➔ LLM Turn 2 ➔ GCP BigQuery (Hop 2 with recursive <code>act</code>) ➔ Cross-Cloud Redaction (Turn 3)</div>
               </button>
@@ -657,24 +659,25 @@
                 </div>
 
                 <!-- Hop 3: RFC 8693 Delegated Token -->
+                <!-- Hop 3: RFC 8693 Delegated Token -->
                 <div class="hop-card" id="card-hop3">
                   <div class="hop-header">
                     <div class="hop-title">
-                      <span>🔗 Hop 3: RFC 8693 Downscoped Delegated Token (Orchestrator ➔ MCP)</span>
-                      <span class="hop-tag tag-rfc8693">OBO Exchange</span>
+                      <span id="hop3-title-text">🔗 Hop 3: RFC 8693 Downscoped Delegated Token (Orchestrator ➔ MCP)</span>
+                      <span class="hop-tag tag-rfc8693" id="hop3-tag">OBO Exchange</span>
                     </div>
                     <span class="status-badge" id="hop3-status"></span>
                   </div>
                   <div class="claim-grid">
-                    <div class="claim-label">Delegated Subject (sub):</div>
+                    <div class="claim-label" id="hop3-sub-label">Delegated Subject (sub):</div>
                     <div class="claim-value" id="hop3-sub"></div>
-                    <div class="claim-label">Target Audience (aud):</div>
+                    <div class="claim-label" id="hop3-aud-label">Target Audience (aud):</div>
                     <div class="claim-value" id="hop3-aud"></div>
-                    <div class="claim-label">Downscoped Scope:</div>
+                    <div class="claim-label" id="hop3-scope-label">Downscoped Scope:</div>
                     <div class="claim-value claim-highlight" id="hop3-scope"></div>
-                    <div class="claim-label">Token TTL:</div>
+                    <div class="claim-label" id="hop3-ttl-label">Token TTL:</div>
                     <div class="claim-value" id="hop3-ttl"></div>
-                    <div class="claim-label">RFC 8693 act Claim:</div>
+                    <div class="claim-label" id="hop3-act-label">RFC 8693 act Claim:</div>
                     <div class="claim-value">
                       <div class="claim-act-box" id="hop3-act-box">
                         <div style="font-size: 11px; color: var(--text-muted); margin-bottom: 4px;">Cryptographically Verifiable Actor Chain:</div>
@@ -683,67 +686,67 @@
                     </div>
                   </div>
                   <details open style="margin-top: 10px;">
-                    <summary style="cursor: pointer; font-size: 11px; font-weight: 600; color: var(--primary); outline: none;">📜 Decoded RFC 8693 Delegated Token (Full Claims with act chain)</summary>
+                    <summary style="cursor: pointer; font-size: 11px; font-weight: 600; color: var(--primary); outline: none;" id="hop3-summary-text">📜 Decoded RFC 8693 Delegated Token (Full Claims with act chain)</summary>
                     <pre id="hop3-decoded" style="margin-top: 6px;"></pre>
                   </details>
                   <details style="margin-top: 6px;">
-                    <summary style="cursor: pointer; font-size: 10px; color: var(--text-muted); outline: none;">🔑 View Raw Encoded RFC 8693 Token</summary>
+                    <summary style="cursor: pointer; font-size: 10px; color: var(--text-muted); outline: none;" id="hop3-raw-summary">🔑 View Raw Encoded RFC 8693 Token Presented at this Hop</summary>
                     <pre id="hop3-raw" style="font-size: 10px; color: #94a3b8; word-break: break-all; margin-top: 4px;"></pre>
                   </details>
                 </div>
 
-                <!-- Hop 4: Azure User-Delegation Storage Token -->
+                <!-- Hop 4: Azure User-Delegation Storage Token / GCP Execution -->
                 <div class="hop-card" id="card-hop4">
                   <div class="hop-header">
                     <div class="hop-title">
-                      <span>☁️ Hop 4: 60s JIT User-Delegation Token (MCP ➔ Azure Storage)</span>
-                      <span class="hop-tag tag-azure">Cloud IAM Kernel</span>
+                      <span id="hop4-title-text">☁️ Hop 4: 60s JIT User-Delegation Token (MCP ➔ Azure Storage)</span>
+                      <span class="hop-tag tag-azure" id="hop4-tag">Cloud IAM Kernel</span>
                     </div>
                     <span class="status-badge" id="hop4-status"></span>
                   </div>
                   <div class="claim-grid">
-                    <div class="claim-label">Credential Type:</div>
+                    <div class="claim-label" id="hop4-cred-type-label">Credential Type:</div>
                     <div class="claim-value" id="hop4-cred-type"></div>
-                    <div class="claim-label">Credential TTL:</div>
+                    <div class="claim-label" id="hop4-ttl-label">Credential TTL:</div>
                     <div class="claim-value claim-highlight" id="hop4-ttl"></div>
-                    <div class="claim-label">Target Resource:</div>
+                    <div class="claim-label" id="hop4-resource-label">Target Resource:</div>
                     <div class="claim-value" id="hop4-resource"></div>
-                    <div class="claim-label">Storage Account:</div>
+                    <div class="claim-label" id="hop4-account-label">Storage Account:</div>
                     <div class="claim-value" id="hop4-account"></div>
-                    <div class="claim-label">Chain Fingerprint:</div>
+                    <div class="claim-label" id="hop4-binding-label">Chain Fingerprint:</div>
                     <div class="claim-value" id="hop4-binding"></div>
-                    <div class="claim-label">Cloud IAM Decision:</div>
+                    <div class="claim-label" id="hop4-decision-label">Cloud IAM Decision:</div>
                     <div class="claim-value" id="hop4-decision"></div>
                   </div>
                   <details open style="margin-top: 10px;">
-                    <summary style="cursor: pointer; font-size: 11px; font-weight: 600; color: var(--primary); outline: none;">📜 Decoded 60s JIT User-Delegation Storage Credential & IAM Audit</summary>
+                    <summary style="cursor: pointer; font-size: 11px; font-weight: 600; color: var(--primary); outline: none;" id="hop4-summary-text">📜 Decoded 60s JIT User-Delegation Storage Credential & IAM Audit</summary>
                     <pre id="hop4-decoded" style="margin-top: 6px;"></pre>
                   </details>
                   <details style="margin-top: 6px;">
-                    <summary style="cursor: pointer; font-size: 10px; color: var(--text-muted); outline: none;">🔑 View Storage Request Header & Signature</summary>
+                    <summary style="cursor: pointer; font-size: 10px; color: var(--text-muted); outline: none;" id="hop4-raw-summary">🔑 View Storage Request Header & Signature</summary>
                     <pre id="hop4-raw" style="font-size: 10px; color: #94a3b8; word-break: break-all; margin-top: 4px;"></pre>
                   </details>
                 </div>
 
-                <!-- Hop 5: RFC 8693 Delegated Token for Microsoft Graph -->
+                <!-- Hop 5: Multi-Hop Recursive Token (GCP BigQuery or Microsoft Graph) -->
                 <div class="hop-card" id="card-hop5" style="display: none;">
                   <div class="hop-header">
                     <div class="hop-title">
-                      <span>🌐 Hop 5: RFC 8693 Delegated Token (Orchestrator ➔ Microsoft Graph)</span>
-                      <span class="hop-tag tag-rfc8693">OBO Graph Token</span>
+                      <span id="hop5-title-text">🌐 Hop 5: RFC 8693 Delegated Token (Orchestrator ➔ Microsoft Graph)</span>
+                      <span class="hop-tag tag-rfc8693" id="hop5-tag">OBO Graph Token</span>
                     </div>
                     <span class="status-badge" id="hop5-status"></span>
                   </div>
                   <div class="claim-grid">
-                    <div class="claim-label">Delegated Subject (sub):</div>
+                    <div class="claim-label" id="hop5-sub-label">Delegated Subject (sub):</div>
                     <div class="claim-value" id="hop5-sub"></div>
-                    <div class="claim-label">Target Audience (aud):</div>
+                    <div class="claim-label" id="hop5-aud-label">Target Audience (aud):</div>
                     <div class="claim-value claim-highlight" id="hop5-aud">https://graph.microsoft.com</div>
-                    <div class="claim-label">Downscoped Scope:</div>
+                    <div class="claim-label" id="hop5-scope-label">Downscoped Scope:</div>
                     <div class="claim-value claim-highlight" id="hop5-scope">Mail.Send</div>
-                    <div class="claim-label">Token TTL:</div>
+                    <div class="claim-label" id="hop5-ttl-label">Token TTL:</div>
                     <div class="claim-value" id="hop5-ttl">300s (Short-Lived Downscoped)</div>
-                    <div class="claim-label">RFC 8693 act Claim:</div>
+                    <div class="claim-label" id="hop5-act-label">RFC 8693 act Claim:</div>
                     <div class="claim-value">
                       <div class="claim-act-box" id="hop5-act-box">
                         <div style="font-size: 11px; color: var(--text-muted); margin-bottom: 4px;">Cryptographically Verifiable Actor Chain:</div>
@@ -752,42 +755,42 @@
                     </div>
                   </div>
                   <details open style="margin-top: 10px;">
-                    <summary style="cursor: pointer; font-size: 11px; font-weight: 600; color: var(--primary); outline: none;">📜 Decoded RFC 8693 Microsoft Graph Delegated Token (Full Claims with act chain)</summary>
+                    <summary style="cursor: pointer; font-size: 11px; font-weight: 600; color: var(--primary); outline: none;" id="hop5-summary-text">📜 Decoded RFC 8693 Microsoft Graph Delegated Token (Full Claims with act chain)</summary>
                     <pre id="hop5-decoded" style="margin-top: 6px;"></pre>
                   </details>
                   <details style="margin-top: 6px;">
-                    <summary style="cursor: pointer; font-size: 10px; color: var(--text-muted); outline: none;">🔑 View Raw Encoded RFC 8693 Graph Token</summary>
+                    <summary style="cursor: pointer; font-size: 10px; color: var(--text-muted); outline: none;" id="hop5-raw-summary">🔑 View Raw Encoded RFC 8693 Token Presented at this Hop</summary>
                     <pre id="hop5-raw" style="font-size: 10px; color: #94a3b8; word-break: break-all; margin-top: 4px;"></pre>
                   </details>
                 </div>
 
-                <!-- Hop 6: Direct Microsoft Graph API Execution -->
+                <!-- Hop 6: Execution (GCP BigQuery or Direct Microsoft Graph) -->
                 <div class="hop-card" id="card-hop6" style="display: none;">
                   <div class="hop-header">
                     <div class="hop-title">
-                      <span>📧 Hop 6: Direct Microsoft Graph API Execution (Orchestrator ➔ Graph API)</span>
-                      <span class="hop-tag tag-azure">Direct Dispatch</span>
+                      <span id="hop6-title-text">📧 Hop 6: Direct Microsoft Graph API Execution (Orchestrator ➔ Graph API)</span>
+                      <span class="hop-tag tag-azure" id="hop6-tag">Direct Dispatch</span>
                     </div>
                     <span class="status-badge" id="hop6-status"></span>
                   </div>
                   <div class="claim-grid">
-                    <div class="claim-label">Direct Invoker:</div>
+                    <div class="claim-label" id="hop6-invoker-label">Direct Invoker:</div>
                     <div class="claim-value claim-highlight" id="hop6-invoker">agent-orchestrator (Azure Storage MCP Server Bypassed)</div>
-                    <div class="claim-label">Target Endpoint:</div>
+                    <div class="claim-label" id="hop6-endpoint-label">Target Endpoint:</div>
                     <div class="claim-value" id="hop6-endpoint">POST https://graph.microsoft.com/v1.0/me/sendMail</div>
-                    <div class="claim-label">Authorized Recipient:</div>
+                    <div class="claim-label" id="hop6-recipient-label">Authorized Recipient:</div>
                     <div class="claim-value claim-highlight" id="hop6-recipient">rtarway@gmail.com</div>
-                    <div class="claim-label">Graph API Decision:</div>
+                    <div class="claim-label" id="hop6-decision-label">Graph API Decision:</div>
                     <div class="claim-value" id="hop6-decision"></div>
-                    <div class="claim-label">Option 1 Delivery Relay:</div>
+                    <div class="claim-label" id="hop6-relay-label">Option 1 Delivery Relay:</div>
                     <div class="claim-value" id="hop6-relay"></div>
                   </div>
                   <details open style="margin-top: 10px;">
-                    <summary style="cursor: pointer; font-size: 11px; font-weight: 600; color: var(--primary); outline: none;">📜 Decoded Graph API Response & Delivery Audit</summary>
+                    <summary style="cursor: pointer; font-size: 11px; font-weight: 600; color: var(--primary); outline: none;" id="hop6-summary-text">📜 Decoded Graph API Response & Delivery Audit</summary>
                     <pre id="hop6-decoded" style="margin-top: 6px;"></pre>
                   </details>
                   <details style="margin-top: 6px;">
-                    <summary style="cursor: pointer; font-size: 10px; color: var(--text-muted); outline: none;">🔑 View Outbound Graph Request Headers & Bearer Token</summary>
+                    <summary style="cursor: pointer; font-size: 10px; color: var(--text-muted); outline: none;" id="hop6-raw-summary">🔑 View Outbound Request Headers & Bearer Token</summary>
                     <pre id="hop6-raw" style="font-size: 10px; color: #94a3b8; word-break: break-all; margin-top: 4px;"></pre>
                   </details>
                 </div>
@@ -957,6 +960,12 @@
       submitPrompt();
     }
 
+    async function loginAndRunCrossCloud(userType) {
+      await doLogin(userType || 'alice');
+      setPrompt('Read financial data from Azure Storage app1, query regional sales in GCP BigQuery, synthesize report, and email executive summary to rtarway@gmail.com');
+      submitPrompt();
+    }
+
     function setPrompt(text) {
       document.getElementById('prompt-input').value = text;
     }
@@ -1001,21 +1010,25 @@
         const isRogue = prompt.toLowerCase().includes('rogue actor') || prompt.toLowerCase().includes('tamper');
 
         // Render Multi-Hop Pipeline Execution Tracker if active
+        // Render Multi-Hop Pipeline Execution Tracker if active
         const mh = data.multiHopExecution;
         const mhTracker = document.getElementById('multihop-tracker');
         if (mh) {
           mhTracker.style.display = 'block';
           const badge = document.getElementById('multihop-badge');
           badge.className = 'status-badge ' + (mh.completed ? 'status-success' : 'status-failed');
-          badge.textContent = mh.completed ? 'ALL 4 STEPS COMPLETED (HTTP 200 + 202)' : 'HALTED AT STEP ' + mh.executedSteps;
+          badge.textContent = mh.completed 
+            ? (hop.isCrossCloud ? 'ALL 3 CROSS-CLOUD STEPS COMPLETED (AZURE + GCP)' : 'ALL 4 STEPS COMPLETED (HTTP 200 + 202)') 
+            : 'HALTED AT STEP ' + mh.executedSteps;
 
           // Step 1
           const s1 = mh.steps[0] || {};
           const s1Card = document.getElementById('mh-step1-card');
           const s1Ok = s1.status === 'SUCCESS';
           s1Card.className = 'hop-card ' + (s1Ok ? 'success' : 'denied');
+          document.getElementById('mh-step1-title').textContent = hop.isCrossCloud ? 'Azure Storage (app1)' : 'Tool1 (app1)';
           document.getElementById('mh-step1-status').innerHTML = s1Ok
-            ? '<span style="color: var(--success); font-weight: bold;">✅ HTTP 200 OK (app1)</span>'
+            ? '<span style="color: var(--success); font-weight: bold;">✅ HTTP 200 OK (' + (s1.cloud || 'app1') + ')</span>'
             : `<span style="color: var(--danger); font-weight: bold;">❌ ${s1.status}</span>`;
 
           // Step 2
@@ -1024,8 +1037,9 @@
           if (mh.executedSteps >= 2) {
             const s2Ok = s2.status === 'SUCCESS';
             s2Card.className = 'hop-card ' + (s2Ok ? 'success' : 'denied');
+            document.getElementById('mh-step2-title').textContent = hop.isCrossCloud ? 'GCP BigQuery (regional_sales)' : 'Tool1 (app2)';
             document.getElementById('mh-step2-status').innerHTML = s2Ok
-              ? '<span style="color: var(--success); font-weight: bold;">✅ HTTP 200 OK (app2)</span>'
+              ? '<span style="color: var(--success); font-weight: bold;">✅ HTTP 200 OK (' + (s2.cloud || 'app2') + ')</span>'
               : `<span style="color: var(--danger); font-weight: bold;">❌ ${s2.status}</span>`;
           } else {
             s2Card.className = 'hop-card';
@@ -1037,6 +1051,7 @@
           const s3Card = document.getElementById('mh-step3-card');
           if (mh.executedSteps >= 3) {
             s3Card.className = 'hop-card success';
+            document.getElementById('mh-step3-title').textContent = hop.isCrossCloud ? 'Cross-Cloud Redaction & Synthesis' : 'LLM Redaction';
             document.getElementById('mh-step3-status').innerHTML = `<span style="color: var(--success); font-weight: bold;">✅ ${s3.redactionDetails?.redactionsCount || 4} FIELDS REDACTED</span>`;
           } else {
             s3Card.className = 'hop-card';
@@ -1046,9 +1061,16 @@
           // Step 4
           const s4 = mh.steps[3] || {};
           const s4Card = document.getElementById('mh-step4-card');
-          if (mh.executedSteps >= 4) {
+          if (hop.isCrossCloud) {
+            s4Card.className = 'hop-card ' + (mh.completed ? 'success' : 'warning');
+            document.getElementById('mh-step4-title').textContent = 'Cross-Cloud Synthesis Ready';
+            document.getElementById('mh-step4-status').innerHTML = mh.completed
+              ? '<span style="color: var(--success); font-weight: bold;">✅ AZURE + GCP COMPLETE</span>'
+              : '<span style="color: var(--warning); font-weight: bold;">HALTED</span>';
+          } else if (mh.executedSteps >= 4) {
             const s4Ok = s4.status === 'SUCCESS';
             s4Card.className = 'hop-card ' + (s4Ok ? 'success' : 'denied');
+            document.getElementById('mh-step4-title').textContent = 'Direct Graph (Mail.Send)';
 
             let relay = null;
             try {
@@ -1079,6 +1101,14 @@
             document.getElementById('mh-step4-status').innerHTML = '<span style="color: var(--text-muted);">⏸️ SKIPPED</span>';
           }
 
+          // Populate Redaction Summary Inspector
+          const redList = document.getElementById('mh-redactions-list');
+          const redBody = document.getElementById('mh-sanitized-body');
+          if (mh.redactionSummary) {
+            if (redList) redList.textContent = (mh.redactionSummary.redactionsPerformed || []).join(', ') || 'PII and sensitive credentials scrubbed';
+            if (redBody) redBody.textContent = mh.redactionSummary.executiveSummary || mh.steps?.[2]?.redactionDetails?.redactedSummary || 'N/A';
+          }
+
           // Turn-by-Turn Conversational Reasoning & Delegation Trace
           const turns = data.conversationalTurns || [];
           const turnsContainer = document.getElementById('mh-turns-container');
@@ -1087,7 +1117,8 @@
             turnsContainer.innerHTML = turns.map(t => {
               const isOk = t.status === 'SUCCESS';
               const badgeClass = isOk ? 'status-success' : 'status-failed';
-              const tokenBadge = t.tokenExchange ? `<span class="hop-tag tag-rfc8693">${t.tokenExchange.requiredScope || 'Token Exchange'}</span>` : '<span class="hop-tag tag-azure">In-Memory LLM</span>';
+              const cloudTag = t.cloud ? `<span class="hop-tag ${t.cloud === 'GCP' ? 'tag-gcp' : (t.cloud === 'Azure' ? 'tag-azure' : 'tag-multicloud')}">${t.cloud}</span>` : '';
+              const tokenBadge = t.tokenExchange ? `<span class="hop-tag tag-rfc8693">${t.tokenExchange.requiredScope || 'RFC 8693'}</span>` : '<span class="hop-tag tag-azure">In-Memory LLM</span>';
               
               let outputSnippet = '';
               if (t.returnedToOrchestrator?.content?.[0]?.text) {
@@ -1095,6 +1126,8 @@
               } else if (t.graphDeliveryResult) {
                 const gr = t.graphDeliveryResult;
                 outputSnippet = `<div style="font-size: 11px; color: var(--text-muted); margin-top: 4px;"><strong>🌐 Direct Graph API Dispatch:</strong> <span style="color: var(--success); font-family: monospace;">HTTP ${gr.graphApiStatus} ${gr.graphApiStatusText} ➔ Delivered via ${gr.deliveryRelay?.provider || 'Relay'}</span></div>`;
+              } else if (t.redactionSummary) {
+                outputSnippet = `<div style="font-size: 11px; color: var(--text-muted); margin-top: 4px;"><strong>🛡️ Executive Synthesis:</strong> <pre style="font-size: 10px; color: #a5f3fc; max-height: 80px; overflow-y: auto; margin-top: 2px;">${t.redactionSummary.executiveSummary.substring(0, 300)}...</pre></div>`;
               } else if (t.error) {
                 outputSnippet = `<div style="font-size: 11px; color: var(--danger); margin-top: 4px;"><strong>❌ Block Reason:</strong> ${t.error.content?.[0]?.text || t.error.audit?.decision}</div>`;
               }
@@ -1104,12 +1137,13 @@
                   <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 6px;">
                     <div style="font-weight: 700; font-size: 12px; display: flex; align-items: center; gap: 8px;">
                       <span>Turn ${t.turn}: ${t.name}</span>
+                      ${cloudTag}
                       ${tokenBadge}
                     </div>
                     <span class="status-badge ${badgeClass}" style="font-size: 10px;">${t.status}</span>
                   </div>
                   <div style="font-size: 11px; color: var(--text-muted); margin-bottom: 4px;">
-                    <strong style="color: var(--purple);">🧠 LLM Intent & Reason:</strong> <span style="color: var(--text);">${t.thought}</span>
+                    <strong style="color: var(--purple);">🧠 LLM Intent & Reason:</strong> <span style="color: var(--text);">${t.thought || t.intent || ''}</span>
                   </div>
                   <div style="font-size: 11px; color: var(--text-muted); margin-bottom: 4px;">
                     <strong>🎯 Invoked Target:</strong> <span style="color: var(--primary); font-family: monospace;">${t.invokedTarget}</span>
@@ -1117,8 +1151,14 @@
                   ${outputSnippet}
                   ${t.tokenExchange?.decoded ? `
                     <details style="margin-top: 6px;">
-                      <summary style="cursor: pointer; font-size: 10px; color: var(--primary); font-weight: 600;">📜 View Token Claims for this Hop (aud: ${t.tokenExchange.targetAudience})</summary>
+                      <summary style="cursor: pointer; font-size: 10px; color: var(--primary); font-weight: 600; outline: none;">📜 View Token Claims Presented at this Turn (aud: ${t.tokenExchange.targetAudience})</summary>
                       <pre style="font-size: 10px; margin-top: 4px; max-height: 120px; overflow-y: auto;">${JSON.stringify(t.tokenExchange.decoded, null, 2)}</pre>
+                    </details>
+                  ` : ''}
+                  ${t.tokenExchange?.token ? `
+                    <details style="margin-top: 4px;">
+                      <summary style="cursor: pointer; font-size: 10px; color: var(--text-muted); outline: none;">🔑 View Raw Bearer Token Presented at this Turn</summary>
+                      <pre style="font-size: 9px; color: #94a3b8; word-break: break-all; margin-top: 4px; max-height: 80px; overflow-y: auto;">Bearer ${t.tokenExchange.token}</pre>
                     </details>
                   ` : ''}
                 </div>
@@ -1158,10 +1198,19 @@
         document.getElementById('hop2-raw').textContent = h2.rawToken || 'N/A';
 
         // Hop 3: RFC 8693 Delegated Token
-        const h3 = hop.hop3_rfc8693Token || {};
+        const h3 = hop.hop3_rfc8693Token || hop.hop3_azureToken || {};
         const cardHop3 = document.getElementById('card-hop3');
         const hop3Status = document.getElementById('hop3-status');
         const hop3ActBox = document.getElementById('hop3-act-box');
+
+        const isHop3Gcp = h3.cloud === 'GCP';
+        document.getElementById('hop3-title-text').textContent = isHop3Gcp
+          ? '🔗 Hop 3: RFC 8693 Downscoped Delegated Token (Orchestrator ➔ GCP BigQuery MCP)'
+          : (hop.isCrossCloud
+              ? '🔗 Hop 3: RFC 8693 Downscoped Delegated Token (Turn 1: Orchestrator ➔ Azure Storage MCP)'
+              : '🔗 Hop 3: RFC 8693 Downscoped Delegated Token (Orchestrator ➔ MCP Server)');
+        document.getElementById('hop3-tag').className = 'hop-tag ' + (isHop3Gcp ? 'tag-gcp' : 'tag-rfc8693');
+        document.getElementById('hop3-tag').textContent = isHop3Gcp ? 'GCP Token Exchange' : 'RFC 8693 Exchange';
 
         if (h3.status === 'BLOCKED_BY_ORCHESTRATOR_FGP') {
           cardHop3.className = 'hop-card denied';
@@ -1196,10 +1245,22 @@
           document.getElementById('hop3-raw').textContent = h3.rawToken || 'N/A';
         }
 
-        // Hop 4: JIT Storage Delegation
-        const h4 = hop.hop4_storageDelegation || {};
+        // Hop 4: JIT Storage Delegation / Cloud Execution
+        const h4 = hop.hop4_storageDelegation || hop.hop4_azureExecution || {};
         const cardHop4 = document.getElementById('card-hop4');
         const hop4Status = document.getElementById('hop4-status');
+
+        const isHop4Gcp = h4.cloud === 'GCP';
+        document.getElementById('hop4-title-text').textContent = isHop4Gcp
+          ? '☁️ Hop 4: Google Cloud BigQuery Execution (MCP ➔ BigQuery API)'
+          : (hop.isCrossCloud
+              ? '☁️ Hop 4: 60s JIT User-Delegation Token (Turn 1: MCP ➔ Azure Storage)'
+              : '☁️ Hop 4: 60s JIT User-Delegation Token (MCP ➔ Azure Storage)');
+        document.getElementById('hop4-tag').className = 'hop-tag ' + (isHop4Gcp ? 'tag-gcp' : 'tag-azure');
+        document.getElementById('hop4-tag').textContent = isHop4Gcp ? 'GCP Cloud IAM' : 'Azure Cloud IAM';
+        document.getElementById('hop4-summary-text').textContent = isHop4Gcp
+          ? '📜 Decoded Google Cloud BigQuery IAM Execution & Result Audit'
+          : '📜 Decoded 60s JIT User-Delegation Storage Credential & IAM Audit';
 
         if (h4.status === 'NOT_EVALUATED') {
           cardHop4.className = 'hop-card warning';
@@ -1215,37 +1276,42 @@
           document.getElementById('hop4-raw').textContent = 'N/A';
         } else {
           const decision = h4.cloudIamStatus || '';
-          const isAllowed = !isError && decision.includes('ALLOWED');
+          const isAllowed = !isError && (decision.includes('ALLOWED') || h4.status === 'SUCCESS');
           cardHop4.className = 'hop-card ' + (isAllowed ? 'success' : 'denied');
           hop4Status.className = 'status-badge ' + (isAllowed ? 'status-success' : 'status-failed');
-          hop4Status.textContent = isAllowed ? 'STORAGE ALLOWED' : (data.mcpResponse?.cloudIAMDecision || 'DENIED');
+          hop4Status.textContent = isAllowed ? (isHop4Gcp ? 'BIGQUERY ALLOWED' : 'STORAGE ALLOWED') : (data.mcpResponse?.cloudIAMDecision || 'DENIED');
 
-          document.getElementById('hop4-cred-type').textContent = h4.credentialType || 'OAuth 2.0 User-Delegation SAS (60s)';
+          document.getElementById('hop4-cred-type').textContent = h4.credentialType || (isHop4Gcp ? 'GCP IAM / BigQuery Parameterized Token' : 'OAuth 2.0 User-Delegation SAS (60s)');
           document.getElementById('hop4-ttl').textContent = (h4.ttlSeconds || 60) + 's (Ephemeral JIT)';
-          document.getElementById('hop4-resource').textContent = h4.resource || (data.plan?.arguments ? `/${data.plan.arguments.container}/${data.plan.arguments.filename}` : 'N/A');
-          document.getElementById('hop4-account').textContent = h4.storageAccount || 'azwifstoragepocrt';
+          document.getElementById('hop4-resource').textContent = h4.resource || (data.plan?.arguments ? (isHop4Gcp ? `${data.plan.arguments.dataset || 'analytics_data'}/${data.plan.arguments.table || 'regional_sales'}` : `/${data.plan.arguments.container}/${data.plan.arguments.filename}`) : 'N/A');
+          document.getElementById('hop4-account').textContent = h4.storageAccount || (isHop4Gcp ? 'gcp-bigquery-dataset' : 'azwifstoragepocrt');
           document.getElementById('hop4-binding').textContent = h4.chainBinding || 'SHA-256 bound to Hop 3 token';
           document.getElementById('hop4-decision').innerHTML = isAllowed
-            ? '<span style="color: var(--success); font-weight: 600;">ALLOWED (HTTP 200 OK via Azure Storage Native RBAC)</span>'
-            : `<span style="color: var(--danger); font-weight: 600;">${decision}</span>`;
+            ? `<span style="color: var(--success); font-weight: 600;">ALLOWED (HTTP 200 OK via ${isHop4Gcp ? 'Google Cloud IAM' : 'Azure Storage Native RBAC'})</span>`
+            : `<span style="color: var(--danger); font-weight: 600;">${decision || 'DENIED'}</span>`;
 
-          document.getElementById('hop4-decoded').textContent = JSON.stringify(h4.decodedToken || {}, null, 2);
+          document.getElementById('hop4-decoded').textContent = JSON.stringify(h4.decodedToken || h4.response || {}, null, 2);
           document.getElementById('hop4-raw').textContent = h4.rawToken || 'N/A';
         }
 
-        // Hop 5: RFC 8693 Delegated Token for Microsoft Graph
-        const h5 = hop.hop5_graphToken;
+        // Hop 5: Multi-Hop Recursive Token (GCP BigQuery or Microsoft Graph)
+        const h5 = hop.hop5_gcpMultiHopToken || hop.hop5_graphToken;
         const cardHop5 = document.getElementById('card-hop5');
         const hop5Status = document.getElementById('hop5-status');
         const hop5ActBox = document.getElementById('hop5-act-box');
 
-        // Hop 6: Direct Microsoft Graph API Execution
-        const h6 = hop.hop6_graphExecution;
-        const cardHop6 = document.getElementById('card-hop6');
-        const hop6Status = document.getElementById('hop6-status');
-
         if (h5 && (h5.rawToken || h5.sub || h5.decodedToken || data.multiHopExecution)) {
           cardHop5.style.display = 'block';
+          const isHop5Gcp = h5.cloud === 'GCP' || !!hop.hop5_gcpMultiHopToken;
+          document.getElementById('hop5-title-text').textContent = isHop5Gcp
+            ? '🌐 Hop 5: RFC 8693 Multi-Hop Recursive Token (Turn 2 ➔ GCP BigQuery MCP)'
+            : '🌐 Hop 5: RFC 8693 Delegated Token (Orchestrator ➔ Microsoft Graph)';
+          document.getElementById('hop5-tag').className = 'hop-tag ' + (isHop5Gcp ? 'tag-gcp' : 'tag-rfc8693');
+          document.getElementById('hop5-tag').textContent = isHop5Gcp ? 'GCP Multi-Hop Chain' : 'OBO Graph Token';
+          document.getElementById('hop5-summary-text').textContent = isHop5Gcp
+            ? '📜 Decoded RFC 8693 GCP Delegated Token (Full Claims with Multi-Hop act chain)'
+            : '📜 Decoded RFC 8693 Microsoft Graph Delegated Token (Full Claims with act chain)';
+
           const isH5Denied = h5.status === 'DENIED_BY_POLICY' || (data.multiHopExecution?.steps?.[3]?.status === 'DENIED_BY_POLICY');
           const isH5NotMinted = h5.status === 'NOT_MINTED' || h5.status === 'NOT_EVALUATED_HALTED_EARLIER';
           
@@ -1254,25 +1320,26 @@
             hop5Status.className = 'status-badge status-neutral';
             hop5Status.textContent = 'NOT MINTED';
             document.getElementById('hop5-sub').textContent = 'N/A';
-            document.getElementById('hop5-aud').textContent = 'https://graph.microsoft.com';
-            document.getElementById('hop5-scope').textContent = 'Mail.Send (Halted)';
+            document.getElementById('hop5-aud').textContent = h5.aud || (isHop5Gcp ? 'gcp-bigquery-mcp-server' : 'https://graph.microsoft.com');
+            document.getElementById('hop5-scope').textContent = isHop5Gcp ? 'mcp:bigquery:query (Halted)' : 'Mail.Send (Halted)';
             document.getElementById('hop5-ttl').textContent = 'N/A';
-            document.getElementById('hop5-act').textContent = 'Pipeline halted before Graph token exchange.';
+            document.getElementById('hop5-act').textContent = 'Pipeline halted before secondary token exchange.';
             document.getElementById('hop5-decoded').textContent = JSON.stringify({ error: 'Token not minted' }, null, 2);
             document.getElementById('hop5-raw').textContent = 'N/A';
           } else {
             cardHop5.className = 'hop-card ' + (isH5Denied ? 'denied' : 'success');
             hop5Status.className = 'status-badge ' + (isH5Denied ? 'status-failed' : 'status-success');
-            hop5Status.textContent = isH5Denied ? 'MAIL.SEND DENIED' : 'GRAPH OBO VALIDATED';
+            hop5Status.textContent = isH5Denied ? 'DELEGATION DENIED' : (isHop5Gcp ? 'GCP RFC 8693 VALIDATED' : 'GRAPH OBO VALIDATED');
 
             document.getElementById('hop5-sub').textContent = h5.sub || data.user?.sub || 'N/A';
-            document.getElementById('hop5-aud').textContent = h5.aud || 'https://graph.microsoft.com';
-            document.getElementById('hop5-scope').textContent = Array.isArray(h5.scope) ? h5.scope.join(' ') : (h5.scope || 'Mail.Send');
+            document.getElementById('hop5-aud').textContent = h5.aud || (isHop5Gcp ? 'gcp-bigquery-mcp-server' : 'https://graph.microsoft.com');
+            document.getElementById('hop5-scope').textContent = Array.isArray(h5.scope) ? h5.scope.join(' ') : (h5.scope || (isHop5Gcp ? 'mcp:bigquery:query' : 'Mail.Send'));
             document.getElementById('hop5-ttl').textContent = (h5.ttlSeconds || 300) + 's (Short-Lived Downscoped)';
             document.getElementById('hop5-act').textContent = JSON.stringify(h5.act || {
               sub: 'spiffe://example.org/ns/agent-system/sa/orchestrator-sa',
               iss: 'https://spire.agent-system.svc.cluster.local',
-              client_id: 'orchestrator-workload-identity'
+              client_id: 'orchestrator-workload-identity',
+              actorChain: h5.actorChain
             }, null, 2);
 
             document.getElementById('hop5-decoded').textContent = JSON.stringify(h5.decodedToken || h5.fullTokenClaims || {}, null, 2);
@@ -1282,35 +1349,85 @@
           cardHop5.style.display = 'none';
         }
 
-        if (h6 || (data.multiHopExecution && data.multiHopExecution.executedSteps >= 4)) {
+        // Hop 6: Execution (GCP BigQuery or Direct Microsoft Graph)
+        const h6 = hop.hop6_gcpExecution || hop.hop6_graphExecution;
+        const cardHop6 = document.getElementById('card-hop6');
+        const hop6Status = document.getElementById('hop6-status');
+
+        const isHop6Gcp = h6?.cloud === 'GCP' || !!hop.hop6_gcpExecution;
+        const isMhGcp = hop.isCrossCloud && data.multiHopExecution && data.multiHopExecution.executedSteps >= 2;
+        const isMhGraph = data.multiHopExecution && data.multiHopExecution.executedSteps >= 4;
+
+        if (h6 || isMhGcp || isMhGraph) {
           cardHop6.style.display = 'block';
-          const s4 = data.multiHopExecution?.steps?.[3];
-          const isH6Ok = s4?.status === 'SUCCESS' || h6?.graphStatus?.includes('200') || h6?.graphStatus?.includes('202');
-          
-          cardHop6.className = 'hop-card ' + (isH6Ok ? 'success' : 'denied');
-          hop6Status.className = 'status-badge ' + (isH6Ok ? 'status-success' : 'status-failed');
-          hop6Status.textContent = isH6Ok ? 'HTTP 202 ACCEPTED' : (s4?.status || 'DENIED');
+          document.getElementById('hop6-title-text').textContent = isHop6Gcp
+            ? '📊 Hop 6: GCP BigQuery Execution (MCP ➔ Google BigQuery API)'
+            : '📧 Hop 6: Direct Microsoft Graph API Execution (Orchestrator ➔ Graph API)';
+          document.getElementById('hop6-tag').className = 'hop-tag ' + (isHop6Gcp ? 'tag-gcp' : 'tag-azure');
+          document.getElementById('hop6-tag').textContent = isHop6Gcp ? 'GCP Cloud Run' : 'Direct Dispatch';
+          document.getElementById('hop6-summary-text').textContent = isHop6Gcp
+            ? '📜 Decoded Google Cloud BigQuery API Execution Result & Query Audit'
+            : '📜 Decoded Graph API Response & Delivery Audit';
 
-          document.getElementById('hop6-recipient').textContent = h6?.recipient || s4?.recipient || 'rtarway@gmail.com';
-          document.getElementById('hop6-decision').innerHTML = isH6Ok
-            ? '<span style="color: var(--success); font-weight: 600;">ALLOWED (HTTP 202 Accepted via Microsoft Graph API)</span>'
-            : `<span style="color: var(--danger); font-weight: 600;">${s4?.mcpResponse?.content?.[0]?.text || s4?.status || 'DENIED_BY_POLICY'}</span>`;
+          if (isHop6Gcp) {
+            const isH6Ok = h6?.status === 'SUCCESS' || (!h6?.isError && !h6?.cloudIAMStatus?.includes('DENIED'));
+            cardHop6.className = 'hop-card ' + (isH6Ok ? 'success' : 'denied');
+            hop6Status.className = 'status-badge ' + (isH6Ok ? 'status-success' : 'status-failed');
+            hop6Status.textContent = isH6Ok ? 'HTTP 200 OK (GCP)' : 'FAILED';
 
-          const relay = h6?.deliveryRelay || (function() {
-            try { return JSON.parse(s4?.mcpResponse?.content?.[0]?.text)?.data?.deliveryRelay; } catch { return null; }
-          })();
+            document.getElementById('hop6-invoker-label').textContent = 'MCP Service Invoker:';
+            document.getElementById('hop6-invoker').textContent = 'gcp-mcp-server (Cloud Run: https://gcp-mcp-server-ur5vhsneiq-uc.a.run.app)';
+            document.getElementById('hop6-endpoint-label').textContent = 'Target BigQuery Endpoint:';
+            document.getElementById('hop6-endpoint').textContent = 'POST https://bigquery.googleapis.com/bigquery/v2/projects/wifdemoproject-507002/queries';
+            document.getElementById('hop6-recipient-label').textContent = 'Target Dataset / Table:';
+            document.getElementById('hop6-recipient').textContent = `${h6?.dataset || 'analytics_data'}.${h6?.table || 'regional_sales'}`;
+            document.getElementById('hop6-decision-label').textContent = 'Google Cloud IAM Decision:';
+            document.getElementById('hop6-decision').innerHTML = isH6Ok
+              ? '<span style="color: var(--success); font-weight: 600;">ALLOWED (HTTP 200 OK via Google Cloud IAM & BigQuery)</span>'
+              : `<span style="color: var(--danger); font-weight: 600;">${h6?.status || 'DENIED'}</span>`;
+            document.getElementById('hop6-relay-label').textContent = 'Execution Telemetry:';
+            document.getElementById('hop6-relay').innerHTML = isH6Ok
+              ? '<span style="color: var(--success); font-weight: 600;">✅ Live BigQuery Query Result Retrieved for ' + (h6?.table || 'regional_sales') + '</span>'
+              : '<span style="color: var(--danger); font-weight: 600;">❌ Query Execution Blocked</span>';
 
-          let relayText = 'Zero Email Dispatched (Blocked)';
-          if (isH6Ok) {
-            if (relay?.delivered) relayText = `✅ Delivered via ${relay.provider} (ID: ${relay.messageId || 'OK'})`;
-            else if (relay?.provider === 'unconfigured') relayText = '⚠️ Graph validated (Set API Key to deliver)';
-            else if (relay?.error) relayText = `⚠️ ${relay.provider || 'Relay'}: ${relay.error}`;
-            else relayText = '✅ Direct Graph API Accepted';
+            document.getElementById('hop6-decoded').textContent = JSON.stringify(h6?.decodedToken || h6?.response || {}, null, 2);
+            document.getElementById('hop6-raw').textContent = h6?.rawToken || ('Bearer ' + (hop.hop5_gcpMultiHopToken?.rawToken || 'N/A'));
+          } else {
+            const s4 = data.multiHopExecution?.steps?.[3];
+            const isH6Ok = s4?.status === 'SUCCESS' || h6?.graphStatus?.includes('200') || h6?.graphStatus?.includes('202');
+            
+            cardHop6.className = 'hop-card ' + (isH6Ok ? 'success' : 'denied');
+            hop6Status.className = 'status-badge ' + (isH6Ok ? 'status-success' : 'status-failed');
+            hop6Status.textContent = isH6Ok ? 'HTTP 202 ACCEPTED' : (s4?.status || 'DENIED');
+
+            document.getElementById('hop6-invoker-label').textContent = 'Direct Invoker:';
+            document.getElementById('hop6-invoker').textContent = 'agent-orchestrator (Azure Storage MCP Server Bypassed)';
+            document.getElementById('hop6-endpoint-label').textContent = 'Target Endpoint:';
+            document.getElementById('hop6-endpoint').textContent = 'POST https://graph.microsoft.com/v1.0/me/sendMail';
+            document.getElementById('hop6-recipient-label').textContent = 'Authorized Recipient:';
+            document.getElementById('hop6-recipient').textContent = h6?.recipient || s4?.recipient || 'rtarway@gmail.com';
+            document.getElementById('hop6-decision-label').textContent = 'Graph API Decision:';
+            document.getElementById('hop6-decision').innerHTML = isH6Ok
+              ? '<span style="color: var(--success); font-weight: 600;">ALLOWED (HTTP 202 Accepted via Microsoft Graph API)</span>'
+              : `<span style="color: var(--danger); font-weight: 600;">${s4?.mcpResponse?.content?.[0]?.text || s4?.status || 'DENIED_BY_POLICY'}</span>`;
+
+            const relay = h6?.deliveryRelay || (function() {
+              try { return JSON.parse(s4?.mcpResponse?.content?.[0]?.text)?.data?.deliveryRelay; } catch { return null; }
+            })();
+
+            let relayText = 'Zero Email Dispatched (Blocked)';
+            if (isH6Ok) {
+              if (relay?.delivered) relayText = `✅ Delivered via ${relay.provider} (ID: ${relay.messageId || 'OK'})`;
+              else if (relay?.provider === 'unconfigured') relayText = '⚠️ Graph validated (Set API Key to deliver)';
+              else if (relay?.error) relayText = `⚠️ ${relay.provider || 'Relay'}: ${relay.error}`;
+              else relayText = '✅ Direct Graph API Accepted';
+            }
+            document.getElementById('hop6-relay-label').textContent = 'Option 1 Delivery Relay:';
+            document.getElementById('hop6-relay').innerHTML = `<span style="color: ${isH6Ok ? 'var(--success)' : 'var(--danger)'}; font-weight: 600;">${relayText}</span>`;
+
+            document.getElementById('hop6-decoded').textContent = JSON.stringify(h6?.decodedToken || s4?.mcpResponse || {}, null, 2);
+            document.getElementById('hop6-raw').textContent = h6?.rawToken || (s4?.token ? `Bearer ${s4.token}` : 'N/A');
           }
-          document.getElementById('hop6-relay').innerHTML = `<span style="color: ${isH6Ok ? 'var(--success)' : 'var(--danger)'}; font-weight: 600;">${relayText}</span>`;
-
-          document.getElementById('hop6-decoded').textContent = JSON.stringify(h6?.decodedToken || s4?.mcpResponse || {}, null, 2);
-          document.getElementById('hop6-raw').textContent = h6?.rawToken || (s4?.token ? `Bearer ${s4.token}` : 'N/A');
         } else {
           cardHop6.style.display = 'none';
         }

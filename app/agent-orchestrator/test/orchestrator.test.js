@@ -488,6 +488,21 @@ describe('A2A Agent Orchestrator & Token Exchange Tests', () => {
     assert.strictEqual(gcpTokenClaims.act.sub, 'spiffe://example.org/ns/agent-system/sa/orchestrator-sa');
     assert.strictEqual(gcpTokenClaims.act.act.sub, 'urn:agent:reasoning-engine:gemini-planner');
     assert.strictEqual(gcpTokenClaims.act.act.act.sub, 'spiffe://example.org/ns/azure/sa/azure-mcp-server');
+    assert.ok(gcpTokenClaims.rawToken);
+
+    // Verify Unified Hop-to-Hop Tokens Presented
+    assert.ok(res.body.hopToHop.hop1_userToken.rawToken);
+    assert.ok(res.body.hopToHop.hop2_agentIdentity.rawToken);
+    assert.ok(res.body.hopToHop.hop3_rfc8693Token.rawToken);
+    assert.ok(res.body.hopToHop.hop3_azureToken.rawToken);
+    assert.ok(res.body.hopToHop.hop4_storageDelegation.rawToken);
+    assert.ok(res.body.hopToHop.hop4_azureExecution.rawToken);
+    assert.ok(res.body.hopToHop.hop6_gcpExecution.rawToken);
+
+    // Verify conversational turns contain tokens presented
+    assert.strictEqual(res.body.conversationalTurns.length, 3);
+    assert.ok(res.body.conversationalTurns[0].tokenExchange.token);
+    assert.ok(res.body.conversationalTurns[1].tokenExchange.token);
   });
 
   test('GCP Single-Step: Bob executes bigquery_query_sales (Allowed)', async () => {
