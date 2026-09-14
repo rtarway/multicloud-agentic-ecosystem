@@ -1,0 +1,64 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: mcp-azure-server
+  namespace: agent-system
+  labels:
+    app: mcp-azure-server
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: mcp-azure-server
+  template:
+    metadata:
+      labels:
+        app: mcp-azure-server
+      annotations:
+        "sidecar.istio.io/inject": "true"
+    spec:
+      containers:
+        - name: mcp-azure-server
+          image: azure-mcp-server:v1.0.0
+          imagePullPolicy: IfNotPresent
+          ports:
+            - containerPort: 8080
+              name: http
+          env:
+            - name: PORT
+              value: "8080"
+            - name: MCP_PROTOCOL_VERSION
+              value: "2026-07-15"
+            - name: AZURE_STORAGE_ACCOUNT
+              value: "azwifstoragepoc"
+            - name: JWT_SECRET
+              value: "demo-obo-token-secret-key-2026"
+          resources:
+            requests:
+              cpu: 100m
+              memory: 128Mi
+            limits:
+              cpu: 500m
+              memory: 256Mi
+          readinessProbe:
+            httpGet:
+              path: /healthz
+              port: 8080
+            initialDelaySeconds: 5
+            periodSeconds: 10
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: mcp-service
+  namespace: agent-system
+  labels:
+    app: mcp-azure-server
+spec:
+  type: ClusterIP
+  selector:
+    app: mcp-azure-server
+  ports:
+    - name: http
+      port: 8080
+      targetPort: 8080

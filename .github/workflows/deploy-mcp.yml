@@ -1,0 +1,49 @@
+name: CI/CD - Test and Deploy MCP Server to Microsoft Foundry
+
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+    branches: [ main ]
+
+jobs:
+  test:
+    name: Run Automated Test Suite
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: Run All Microservice Tests
+        run: |
+          chmod +x ./scripts/test-all.sh
+          ./scripts/test-all.sh
+
+  deploy-foundry:
+    name: Deploy MCP Server to Microsoft Foundry
+    needs: test
+    if: github.ref == 'refs/heads/main' && github.event_name == 'push'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      - name: Azure CLI Login
+        if: env.AZURE_CREDENTIALS != ''
+        uses: azure/login@v2
+        with:
+          creds: ${{ secrets.AZURE_CREDENTIALS }}
+
+      - name: Deploy Low-Code MCP Tools to Microsoft Foundry
+        env:
+          AZURE_RESOURCE_GROUP: ${{ secrets.AZURE_RESOURCE_GROUP || 'rg-azure-wif-demo' }}
+          FOUNDRY_HUB_NAME: ${{ secrets.FOUNDRY_HUB_NAME || 'hub-azure-wif-foundry' }}
+          FOUNDRY_PROJECT_NAME: ${{ secrets.FOUNDRY_PROJECT_NAME || 'proj-azure-wif-mcp' }}
+        run: |
+          chmod +x ./scripts/foundry-deploy.sh
+          ./scripts/foundry-deploy.sh

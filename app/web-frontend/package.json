@@ -1,0 +1,17 @@
+{
+  "name": "web-frontend",
+  "version": "1.0.0",
+  "description": "Interactive Web Frontend Dashboard for Azure WIF POC (Kept Outside SPIRE)",
+  "main": "src/index.js",
+  "scripts": {
+    "start": "node src/index.js",
+    "test": "node --test test/*.test.js"
+  },
+  "dependencies": {
+    "express": "^4.19.2"
+  },
+  "devDependencies": {},
+  "engines": {
+    "node": ">=18.0.0"
+  }
+}

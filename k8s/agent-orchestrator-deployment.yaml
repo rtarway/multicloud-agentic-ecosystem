@@ -1,0 +1,103 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: agent-config
+  namespace: agent-system
+data:
+  # Default points to local in-cluster MCP server; automatically updated when Azure MCP server is deployed
+  MCP_SERVER_URL: "http://mcp-service.agent-system.svc.cluster.local:8080"
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: orchestrator-sa
+  namespace: agent-system
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: agent-orchestrator
+  namespace: agent-system
+  labels:
+    app: agent-orchestrator
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: agent-orchestrator
+  template:
+    metadata:
+      labels:
+        app: agent-orchestrator
+      annotations:
+        # Architecture Requirement: Kept INSIDE SPIRE & Istio for cryptographic Workload Identity
+        "sidecar.istio.io/inject": "true"
+        "inject.spiffe.io/spire-agent": "true"
+    spec:
+      serviceAccountName: orchestrator-sa
+      containers:
+        - name: agent-orchestrator
+          image: agent-orchestrator:v1.0.0
+          imagePullPolicy: IfNotPresent
+          ports:
+            - containerPort: 3001
+              name: http
+          env:
+            - name: PORT
+              value: "3001"
+            - name: MCP_SERVER_URL
+              valueFrom:
+                configMapKeyRef:
+                  name: agent-config
+                  key: MCP_SERVER_URL
+                  optional: true
+            - name: GCP_MCP_SERVER_URL
+              value: "http://gcp-mcp-service.agent-system.svc.cluster.local:8081/mcp"
+            - name: GCP_PROJECT_ID
+              value: "wifdemoproject-507002"
+            - name: GCP_PROJECT_NUMBER
+              value: "834200279688"
+            - name: SPIRE_AGENT_SOCKET
+              value: "/run/spire/sockets/agent.sock"
+            - name: AGENT_SPIFFE_ID
+              value: "spiffe://example.org/ns/agent-system/sa/orchestrator-sa"
+
+          volumeMounts:
+            # Mount SPIRE Agent Workload API socket directly via SPIFFE CSI Driver
+            - name: spiffe-workload-api
+              mountPath: /run/spire/sockets
+              readOnly: true
+          resources:
+            requests:
+              cpu: 100m
+              memory: 128Mi
+            limits:
+              cpu: 500m
+              memory: 256Mi
+          readinessProbe:
+            httpGet:
+              path: /healthz
+              port: 3001
+            initialDelaySeconds: 5
+            periodSeconds: 10
+      volumes:
+        - name: spiffe-workload-api
+          csi:
+            driver: "csi.spiffe.io"
+            readOnly: true
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: agent-orchestrator
+  namespace: agent-system
+  labels:
+    app: agent-orchestrator
+spec:
+  type: ClusterIP
+  selector:
+    app: agent-orchestrator
+  ports:
+    - name: http
+      port: 3001
+      targetPort: 3001

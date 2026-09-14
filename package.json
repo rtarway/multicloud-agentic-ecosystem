@@ -1,0 +1,29 @@
+{
+  "name": "multicloud-agentic-ecosystem",
+  "version": "1.0.0",
+  "description": "Multi-Cloud Agentic AI Ecosystem (Azure + GCP) with SPIRE, Istio, RFC 8693 Recursive Multi-Hop Delegated Actor Chains, and Low-Code Declarative MCP Servers",
+  "private": true,
+  "scripts": {
+    "test": "npm run test:mcp && npm run test:gcp-mcp && npm run test:agent && npm run test:frontend",
+    "test:mcp": "npm --prefix app/mcp-server test",
+    "test:gcp-mcp": "node --test app/gcp-mcp-server/test/gcp-mcp.test.js",
+    "test:agent": "npm --prefix app/agent-orchestrator test",
+    "test:frontend": "npm --prefix app/web-frontend test",
+    "demo": "./scripts/run-demo.sh",
+    "start:ui": "node scripts/start-ui.js"
+  },
+  "keywords": [
+    "spire",
+    "istio",
+    "keycloak",
+    "azure-wif",
+    "gcp-wif",
+    "bigquery",
+    "mcp",
+    "rfc8693",
+    "multi-hop",
+    "a2a"
+  ],
+  "author": "",
+  "license": "Apache-2.0"
+}

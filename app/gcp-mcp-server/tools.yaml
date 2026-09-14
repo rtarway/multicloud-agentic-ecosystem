@@ -1,0 +1,80 @@
+# Declarative Low-Code MCP Tool Registry for Google Cloud Platform
+# Conforms to Model Context Protocol (MCP) Specification version 2026-07-15
+# Declares BigQuery tools, input schemas, required scopes, and Fine-Grained Policies (FGP).
+
+version: "2026-07-15"
+tools:
+  - name: "bigquery_query_sales"
+    title: "GCP BigQuery Regional Sales & Telemetry Tool"
+    description: "Queries regional sales revenue, order volumes, and customer telemetry from GCP BigQuery dataset 'analytics_data'. Permitted for regular users and administrators with mcp:bigquery:query scope."
+    required_scope: "mcp:bigquery:query"
+    target_backend: "gcp_bigquery"
+    allowed_datasets:
+      - "analytics_data"
+    allowed_tables:
+      - "regional_sales"
+      - "customer_telemetry"
+    inputSchema:
+      type: "object"
+      properties:
+        quarter:
+          type: "string"
+          enum: ["Q1-2026", "Q2-2026", "Q3-2026", "Q4-2026"]
+          description: "Reporting quarter (e.g. Q2-2026)"
+        region:
+          type: "string"
+          enum: ["north-america", "emea", "apac", "latam"]
+          description: "Target geographic sales region"
+        metric:
+          type: "string"
+          enum: ["revenue_breakdown", "active_accounts", "churn_risk"]
+          description: "Target performance metric to extract"
+      required:
+        - "quarter"
+        - "region"
+        - "metric"
+    fine_grained_policies:
+      - id: "prevent_unbounded_export"
+        description: "Enforce least privilege by blocking wildcard or unbounded exports"
+        effect: "DENY"
+        condition: "args.region == '*' || args.quarter == 'all' || args.metric == 'dump_all'"
+        message: "Fine-Grained Policy Denial: Wildcard querying is strictly prohibited under least privilege."
+      - id: "sanctioned_region_check"
+        description: "Blocks queries directed at unapproved regions"
+        effect: "DENY"
+        condition: "!['north-america', 'emea', 'apac', 'latam'].includes(args.region)"
+        message: "Fine-Grained Policy Denial: Specified region is not authorized for analytics export."
+
+  - name: "bigquery_audit_compliance"
+    title: "GCP BigQuery Audit Logs & IAM Compliance Tool"
+    description: "Provides read-only access to BigQuery query execution audit logs and IAM access records from 'audit_logs' dataset. Restricted strictly to administrators with mcp:bigquery:audit scope."
+    required_scope: "mcp:bigquery:audit"
+    target_backend: "gcp_bigquery"
+    allowed_datasets:
+      - "audit_logs"
+    allowed_tables:
+      - "cloudaudit_googleapis_com_data_access"
+      - "iam_policy_evaluations"
+    inputSchema:
+      type: "object"
+      properties:
+        dataset:
+          type: "string"
+          enum: ["audit_logs"]
+          description: "Target audit dataset (strictly audit_logs)"
+        timeRange:
+          type: "string"
+          enum: ["last_24h", "last_7d", "last_30d"]
+          description: "Time range window for audit events"
+        filterActor:
+          type: "string"
+          description: "Optional principal or actor SPIFFE ID to filter audit records"
+      required:
+        - "dataset"
+        - "timeRange"
+    fine_grained_policies:
+      - id: "prevent_audit_log_deletion"
+        description: "Enforce audit immutability"
+        effect: "DENY"
+        condition: "args.action && (args.action == 'delete' || args.action == 'truncate')"
+        message: "Fine-Grained Policy Denial: Audit logs are append-only and immutable."

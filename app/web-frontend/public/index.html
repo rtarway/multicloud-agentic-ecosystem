@@ -1,0 +1,1332 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Azure WIF & RFC 8693 Agentic MCP POC</title>
+  <style>
+    :root {
+      --bg: #0b1120;
+      --card-bg: #1e293b;
+      --card-sub-bg: #0f172a;
+      --border: #334155;
+      --text: #f8fafc;
+      --text-muted: #94a3b8;
+      --primary: #38bdf8;
+      --primary-hover: #0284c7;
+      --success: #22c55e;
+      --danger: #ef4444;
+      --warning: #f59e0b;
+      --purple: #a855f7;
+      --code-bg: #030712;
+    }
+    * { box-sizing: border-box; margin: 0; padding: 0; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; }
+    body { background-color: var(--bg); color: var(--text); padding: 24px; min-height: 100vh; }
+    .container { max-width: 1350px; margin: 0 auto; }
+    
+    header { margin-bottom: 24px; padding-bottom: 16px; border-bottom: 1px solid var(--border); }
+    .header-top { display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 12px; }
+    h1 { font-size: 24px; color: var(--primary); display: flex; align-items: center; gap: 12px; }
+    .subtitle { color: var(--text-muted); font-size: 13px; margin-top: 6px; line-height: 1.5; }
+    .badge-outside-spire { background: #6366f1; color: white; padding: 3px 10px; border-radius: 12px; font-size: 11px; font-weight: 600; }
+    .badge-rfc8693 { background: #059669; color: white; padding: 3px 10px; border-radius: 12px; font-size: 11px; font-weight: 600; }
+    .badge-user { background: rgba(56, 189, 248, 0.15); color: var(--primary); border: 1px solid rgba(56, 189, 248, 0.4); padding: 4px 10px; border-radius: 14px; font-size: 12px; font-weight: 600; }
+
+    /* Login Page Styles */
+    #login-screen { max-width: 1100px; margin: 20px auto; }
+    .login-hero { text-align: center; margin-bottom: 32px; }
+    .login-hero h2 { font-size: 28px; color: #f8fafc; margin-bottom: 8px; font-weight: 700; }
+    .login-hero p { color: var(--text-muted); font-size: 15px; max-width: 700px; margin: 0 auto; }
+    
+    .persona-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(320px, 1fr)); gap: 20px; margin-bottom: 28px; }
+    .persona-card { background: var(--card-bg); border: 1px solid var(--border); border-radius: 10px; padding: 22px; display: flex; flex-direction: column; justify-content: space-between; position: relative; transition: transform 0.2s, box-shadow 0.2s; }
+    .persona-card:hover { transform: translateY(-3px); box-shadow: 0 10px 25px rgba(0,0,0,0.3); }
+    .persona-alice { border-top: 4px solid var(--primary); }
+    .persona-bob { border-top: 4px solid var(--warning); }
+    .persona-charlie { border-top: 4px solid var(--danger); }
+    
+    .persona-header { display: flex; justify-content: space-between; align-items: flex-start; margin-bottom: 12px; }
+    .persona-name { font-size: 18px; font-weight: 700; color: var(--text); }
+    .persona-role-tag { font-size: 11px; font-weight: 700; padding: 3px 8px; border-radius: 4px; text-transform: uppercase; }
+    .tag-alice { background: rgba(56, 189, 248, 0.2); color: var(--primary); border: 1px solid var(--primary); }
+    .tag-bob { background: rgba(245, 158, 11, 0.2); color: var(--warning); border: 1px solid var(--warning); }
+    .tag-charlie { background: rgba(239, 68, 68, 0.2); color: var(--danger); border: 1px solid var(--danger); }
+    
+    .persona-creds { background: var(--code-bg); border: 1px solid var(--border); border-radius: 6px; padding: 10px 12px; margin: 12px 0; font-family: monospace; font-size: 12px; }
+    .persona-creds div { margin-bottom: 3px; }
+    .persona-creds div:last-child { margin-bottom: 0; }
+    .persona-creds span.val { color: var(--primary); font-weight: 600; }
+    
+    .persona-perms { font-size: 12px; color: var(--text-muted); line-height: 1.5; margin-bottom: 16px; flex-grow: 1; }
+    .persona-perms strong { color: #e2e8f0; }
+    
+    .btn-login-card { width: 100%; padding: 12px; border-radius: 6px; font-size: 14px; font-weight: 600; cursor: pointer; border: none; transition: background 0.2s; display: flex; align-items: center; justify-content: center; gap: 8px; }
+    .btn-login-alice { background: var(--primary); color: #0f172a; }
+    .btn-login-alice:hover { background: var(--primary-hover); color: white; }
+    .btn-login-bob { background: var(--warning); color: #0f172a; }
+    .btn-login-bob:hover { background: #d97706; color: white; }
+    .btn-login-charlie { background: #ef4444; color: white; }
+    .btn-login-charlie:hover { background: #dc2626; }
+
+    /* Dashboard Layout */
+    .grid { display: grid; grid-template-columns: 420px 1fr; gap: 24px; }
+    .card { background: var(--card-bg); border: 1px solid var(--border); border-radius: 8px; padding: 18px; margin-bottom: 20px; }
+    .card h2 { font-size: 15px; margin-bottom: 12px; color: var(--text); border-bottom: 1px solid var(--border); padding-bottom: 8px; display: flex; justify-content: space-between; align-items: center; }
+    
+    .btn { background: var(--border); color: var(--text); border: none; padding: 10px 14px; border-radius: 6px; cursor: pointer; font-size: 13px; font-weight: 500; transition: all 0.2s; }
+    .btn:hover { background: #475569; }
+    .btn-primary { background: var(--primary); color: #0f172a; font-weight: 600; }
+    .btn-primary:hover { background: var(--primary-hover); color: white; }
+    .btn-active { outline: 2px solid var(--primary); box-shadow: 0 0 10px rgba(56, 189, 248, 0.4); }
+    
+    .user-pill { padding: 12px; border-radius: 6px; background: var(--card-sub-bg); margin-top: 12px; border: 1px solid var(--border); }
+    .role-badge { display: inline-block; padding: 2px 8px; border-radius: 4px; font-size: 11px; font-weight: bold; margin-left: 4px; }
+    .role-admin { background: rgba(56, 189, 248, 0.2); color: var(--primary); border: 1px solid var(--primary); }
+    .role-regular { background: rgba(245, 158, 11, 0.2); color: var(--warning); border: 1px solid var(--warning); }
+    .role-charlie { background: rgba(239, 68, 68, 0.2); color: var(--danger); border: 1px solid var(--danger); }
+    
+    /* Token Inspector Cards */
+    .token-card { background: var(--card-sub-bg); border: 1px solid var(--border); border-radius: 6px; padding: 12px; margin-top: 10px; }
+    .token-card-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px; font-size: 12px; font-weight: 600; }
+    .token-badge-keycloak { background: #6366f1; color: white; padding: 2px 8px; border-radius: 4px; font-size: 10px; font-weight: 700; }
+    .token-badge-entra { background: #0284c7; color: white; padding: 2px 8px; border-radius: 4px; font-size: 10px; font-weight: 700; }
+    
+    textarea { width: 100%; height: 75px; background: var(--code-bg); border: 1px solid var(--border); border-radius: 6px; color: var(--text); padding: 10px; font-size: 13px; resize: vertical; margin-top: 8px; margin-bottom: 10px; }
+    textarea:focus { outline: 1px solid var(--primary); }
+    
+    .quick-prompts { display: flex; flex-direction: column; gap: 8px; margin-bottom: 14px; }
+    .quick-btn { text-align: left; font-size: 12px; padding: 10px 12px; background: rgba(255,255,255,0.03); border: 1px solid rgba(255,255,255,0.08); border-radius: 6px; cursor: pointer; transition: all 0.2s; }
+    .quick-btn:hover { background: rgba(255,255,255,0.08); border-color: var(--primary); }
+    .quick-btn b { color: var(--primary); }
+    .quick-btn .desc { font-size: 11px; color: var(--text-muted); margin-top: 2px; }
+    
+    /* Hop-to-Hop Pipeline Styles */
+    .pipeline-container { display: flex; flex-direction: column; gap: 14px; margin-top: 14px; }
+    .hop-card { background: var(--card-sub-bg); border: 1px solid var(--border); border-radius: 6px; padding: 14px; position: relative; }
+    .hop-card.success { border-left: 4px solid var(--success); }
+    .hop-card.denied { border-left: 4px solid var(--danger); }
+    .hop-card.warning { border-left: 4px solid var(--warning); }
+    .hop-card.info { border-left: 4px solid var(--primary); }
+    
+    .hop-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px; }
+    .hop-title { font-size: 13px; font-weight: 600; display: flex; align-items: center; gap: 8px; }
+    .hop-tag { font-size: 10px; text-transform: uppercase; padding: 2px 6px; border-radius: 4px; font-weight: 700; }
+    .tag-jwt { background: #3b82f6; color: white; }
+    .tag-spiffe { background: #8b5cf6; color: white; }
+    .tag-rfc8693 { background: #10b981; color: white; }
+    .tag-azure { background: #0284c7; color: white; }
+    
+    .claim-grid { display: grid; grid-template-columns: 140px 1fr; gap: 6px; font-size: 12px; margin-bottom: 6px; }
+    .claim-label { color: var(--text-muted); font-weight: 500; }
+    .claim-value { font-family: monospace; color: #e2e8f0; word-break: break-all; }
+    .claim-highlight { background: rgba(56, 189, 248, 0.1); padding: 2px 6px; border-radius: 4px; border: 1px solid rgba(56, 189, 248, 0.3); color: var(--primary); }
+    .claim-act-box { background: rgba(16, 185, 129, 0.08); border: 1px solid rgba(16, 185, 129, 0.3); border-radius: 4px; padding: 8px; margin-top: 6px; }
+    .claim-act-box.tampered { background: rgba(239, 68, 68, 0.1); border-color: rgba(239, 68, 68, 0.4); }
+    
+    pre { background: var(--code-bg); padding: 10px; border-radius: 4px; font-family: monospace; font-size: 11px; color: #38bdf8; overflow-x: auto; white-space: pre-wrap; word-break: break-all; margin-top: 6px; border: 1px solid rgba(255,255,255,0.05); }
+    
+    .status-badge { padding: 4px 8px; border-radius: 4px; font-size: 11px; font-weight: bold; }
+    .status-success { background: rgba(34, 197, 94, 0.2); color: var(--success); border: 1px solid var(--success); }
+    .status-failed { background: rgba(239, 68, 68, 0.2); color: var(--danger); border: 1px solid var(--danger); }
+    .status-neutral { background: rgba(148, 163, 184, 0.2); color: var(--text-muted); border: 1px solid var(--border); }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <header>
+      <div class="header-top">
+        <div>
+          <h1>🌐 Multi-Cloud Agentic AI Ecosystem & RFC 8693 Mesh</h1>
+          <div style="display: flex; gap: 8px; align-items: center; flex-wrap: wrap; margin-top: 6px;">
+            <span class="badge-outside-spire">Azure Storage MCP</span>
+            <span style="background: #ea4335; color: white; padding: 3px 10px; border-radius: 12px; font-size: 11px; font-weight: 600;">GCP BigQuery MCP</span>
+            <span class="badge-rfc8693">RFC 8693 Multi-Hop act</span>
+            <span id="header-user-badge" class="badge-user" style="display: none;"></span>
+          </div>
+        </div>
+        <div style="display: flex; align-items: center; gap: 10px;">
+          <button class="btn" style="padding: 6px 12px; font-size: 12px; background: rgba(56, 189, 248, 0.12); color: var(--primary); border: 1px solid rgba(56, 189, 248, 0.35);" onclick="toggleArchModal()">
+            🌐 B2B Federation Architecture
+          </button>
+          <div id="header-user-status" style="display: none; align-items: center; gap: 12px;">
+            <span id="header-user-badge" class="badge-user">Logged in as Alice</span>
+            <button class="btn" style="padding: 6px 12px; font-size: 12px; border: 1px solid var(--border);" onclick="logout()">
+              🔄 Switch User / Logout
+            </button>
+          </div>
+        </div>
+      </div>
+      <div class="subtitle">
+        Entra ID (rtarwaygmail.onmicrosoft.com) &bull; SPIRE + Istio Workload Identity &bull; Cryptographic RFC 8693 Recursive <code>act</code> Claims &bull; 60s JIT Azure User-Delegation (Zero Account Keys)
+      </div>
+    </header>
+
+    <!-- ============================================================= -->
+    <!-- MODAL: B2B IDENTITY FEDERATION & MULTI-HOP ARCHITECTURE -->
+    <!-- ============================================================= -->
+    <div id="arch-modal" style="display: none; position: fixed; inset: 0; background: rgba(0,0,0,0.8); z-index: 9999; overflow-y: auto; padding: 20px;">
+      <div style="max-width: 960px; margin: 30px auto; background: var(--card-bg); border: 1px solid var(--border); border-radius: 12px; padding: 28px; box-shadow: 0 20px 40px rgba(0,0,0,0.5);">
+        <div style="display: flex; justify-content: space-between; align-items: center; border-bottom: 1px solid var(--border); padding-bottom: 14px; margin-bottom: 20px;">
+          <div>
+            <h2 style="font-size: 20px; color: var(--primary); display: flex; align-items: center; gap: 10px;">
+              🌐 B2B Identity Federation & Multi-Hop Token Architecture
+            </h2>
+            <div style="font-size: 12px; color: var(--text-muted); margin-top: 4px;">
+              How Keycloak Single Sign-On bridges into Microsoft Entra ID to mint dual tokens and enforce fine-grained delegation.
+            </div>
+          </div>
+          <button class="btn" style="padding: 6px 14px; font-size: 13px;" onclick="toggleArchModal()">✕ Close</button>
+        </div>
+
+        <!-- Visual Sequence / Flow Cards -->
+        <div style="display: flex; flex-direction: column; gap: 14px; margin-bottom: 22px;">
+          <div style="background: var(--card-sub-bg); border-left: 4px solid #6366f1; border-radius: 6px; padding: 14px;">
+            <div style="font-weight: 700; font-size: 13px; color: #a5b4fc; margin-bottom: 4px;">
+              1. Single Sign-On at Corporate Keycloak (Identity Authority)
+            </div>
+            <div style="font-size: 12px; color: var(--text-muted); line-height: 1.5;">
+              The human user (Alice, Bob, or Charlie) logs into Keycloak via 1-click login. Keycloak verifies corporate credentials and issues a signed <b>Keycloak OIDC Bearer Token</b> containing realm roles (<code>admin</code>, <code>auditor</code>, <code>Storage Blob Data Reader</code>) and client scopes (<code>mcp:tool1</code>, <code>mcp:tool2</code>, <code>Mail.Send</code>). <i>The user has no password in Azure and never enters credentials twice.</i>
+            </div>
+          </div>
+
+          <div style="background: var(--card-sub-bg); border-left: 4px solid #0284c7; border-radius: 6px; padding: 14px;">
+            <div style="font-weight: 700; font-size: 13px; color: var(--primary); margin-bottom: 4px;">
+              2. B2B Identity Federation Bridge & Dual Token Issuance
+            </div>
+            <div style="font-size: 12px; color: var(--text-muted); line-height: 1.5;">
+              The client/federation broker presents the Keycloak assertion to Microsoft Entra ID (RFC 7523 / SAML 2.0 Direct Federation). Entra ID validates Keycloak's cryptographic signature against Keycloak's published JWKS, maps Keycloak identity attributes to the tenant user, evaluates Claims-Mapping Policies, and mints an authentic <b>Microsoft Entra ID User Subject Token</b> (<code>iss: login.microsoftonline.com/81f26b58...</code>, <code>scp</code>, <code>roles</code>).
+            </div>
+          </div>
+
+          <div style="background: var(--card-sub-bg); border-left: 4px solid var(--success); border-radius: 6px; padding: 14px;">
+            <div style="font-weight: 700; font-size: 13px; color: var(--success); margin-bottom: 4px;">
+              3. Scope Synchronization & Downscoping Governance
+            </div>
+            <div style="font-size: 12px; color: var(--text-muted); line-height: 1.5;">
+              • <b>Is Scope Synchronization Automated?</b> In B2B federation, identity claims (roles/groups) sync via claims transformation and SCIM 2.0. Delegated scopes (like <code>Mail.Send</code> or <code>mcp:tool1</code>) are pre-consented via <b>Tenant-Wide Admin Consent</b>. When a user with the required role arrives, Entra ID authorizes the matching scopes.<br/>
+              • <b>Why both <code>scp</code> and <code>scope</code> claims?</b> Entra ID historically uses <code>scp</code> for delegated permissions; RFC 6749 standard uses <code>scope</code>. Both are provided for 100% compatibility with Microsoft SDKs and standard OAuth clients.<br/>
+              • <b>Scope Carryover:</b> Alice possesses <code>Mail.Send</code>, so Entra ID grants it. Charlie lacks <code>Mail.Send</code> in Keycloak and Entra ID, so Entra ID strictly excludes it — blocking unauthorized email dispatch at Step 4.
+            </div>
+          </div>
+
+          <div style="background: var(--card-sub-bg); border-left: 4px solid var(--purple); border-radius: 6px; padding: 14px;">
+            <div style="font-weight: 700; font-size: 13px; color: var(--purple); margin-bottom: 4px;">
+              4. RFC 8693 Agentic Workload Delegation (Downstream Hops)
+            </div>
+            <div style="font-size: 12px; color: var(--text-muted); line-height: 1.5;">
+              The Orchestrator receives the federated tokens, combines them with its SPIRE SVID (workload identity), and executes targeted token exchanges: <b>Hop 3</b> to Azure Storage MCP (downscoped to <code>mcp:tool1</code>) ➔ <b>Hop 4</b> JIT 60s user-delegation SAS ➔ In-Memory Redaction ➔ <b>Hop 5 & 6</b> RFC 8693 OBO token exchange to Microsoft Graph for direct email delivery.
+            </div>
+          </div>
+        </div>
+
+        <div style="text-align: right;">
+          <button class="btn btn-primary" onclick="toggleArchModal()">Got It, Back to POC</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- ============================================================= -->
+    <!-- SCREEN 1: DEDICATED LOGIN PORTAL -->
+    <!-- ============================================================= -->
+    <div id="login-screen">
+      <div class="login-hero">
+        <h2>🔐 Select Identity & Sign In</h2>
+        <p>
+          Choose a pre-configured test identity to simulate Keycloak OIDC authentication and Microsoft Entra ID token issuance. 
+          Click any 1-Click Login button to start without typing credentials.
+        </p>
+      </div>
+
+      <div class="persona-grid">
+        <!-- Persona 1: Alice -->
+        <div class="persona-card persona-alice">
+          <div>
+            <div class="persona-header">
+              <div class="persona-name">Alice</div>
+              <span class="persona-role-tag tag-alice">Full Authorized</span>
+            </div>
+            <div style="font-size: 12px; color: var(--primary); font-weight: 600; margin-bottom: 6px;">
+              Auditor / Storage Reader + Mail.Send
+            </div>
+            <div class="persona-creds">
+              <div>👤 Username: <span class="val">alice</span></div>
+              <div>🔑 Password: <span class="val">Password123!</span></div>
+              <div>📧 Email: <span class="val">alice@rtarwaygmail.onmicrosoft.com</span></div>
+            </div>
+            <div class="persona-perms">
+              <div>&bull; <b>Azure Storage</b>: Reader on <code>app1</code> & <code>app2</code></div>
+              <div>&bull; <b>Microsoft Graph</b>: <span style="color: var(--success); font-weight: bold;">Authorized (Mail.Send)</span></div>
+              <div>&bull; <b>Keycloak Scopes</b>: <code>mcp:tool1</code>, <code>mcp:tool2</code>, <code>Mail.Send</code></div>
+              <div style="margin-top: 6px; font-size: 11px; color: var(--text-muted);">
+                Runs complete Scenario F: reads app1 & app2, executes LLM redaction, and dispatches real email via Graph API.
+              </div>
+            </div>
+          </div>
+          <button class="btn-login-card btn-login-alice" onclick="doLogin('alice', 'Password123!')">
+            🚀 1-Click Login as Alice
+          </button>
+        </div>
+
+        <!-- Persona 2: Bob -->
+        <div class="persona-card persona-bob">
+          <div>
+            <div class="persona-header">
+              <div class="persona-name">Bob</div>
+              <span class="persona-role-tag tag-bob">Storage Contributor</span>
+            </div>
+            <div style="font-size: 12px; color: var(--warning); font-weight: 600; margin-bottom: 6px;">
+              Data Contributor on app2 ONLY (No app1 Role)
+            </div>
+            <div class="persona-creds">
+              <div>👤 Username: <span class="val">bob</span></div>
+              <div>🔑 Password: <span class="val">Password123!</span></div>
+              <div>📧 Email: <span class="val">bob@rtarwaygmail.onmicrosoft.com</span></div>
+            </div>
+            <div class="persona-perms">
+              <div>&bull; <b>Azure Storage</b>: Contributor on <code>app2</code> ONLY</div>
+              <div>&bull; <b>Container app1</b>: <span style="color: var(--danger); font-weight: bold;">HTTP 403 Forbidden (No Role)</span></div>
+              <div>&bull; <b>Microsoft Graph</b>: Zero Graph permissions</div>
+              <div style="margin-top: 6px; font-size: 11px; color: var(--text-muted);">
+                Used to demonstrate real Azure Cloud IAM kernel RBAC rejection when accessing unauthorized storage containers.
+              </div>
+            </div>
+          </div>
+          <button class="btn-login-card btn-login-bob" onclick="doLogin('bob', 'Password123!')">
+            🚀 1-Click Login as Bob
+          </button>
+        </div>
+
+        <!-- Persona 3: Charlie -->
+        <div class="persona-card persona-charlie">
+          <div>
+            <div class="persona-header">
+              <div class="persona-name">Charlie</div>
+              <span class="persona-role-tag tag-charlie">No Graph Permission</span>
+            </div>
+            <div style="font-size: 12px; color: var(--danger); font-weight: 600; margin-bottom: 6px;">
+              Storage Reader / NO Graph Mail.Send
+            </div>
+            <div class="persona-creds">
+              <div>👤 Username: <span class="val">charlie</span></div>
+              <div>🔑 Password: <span class="val">Password123!</span></div>
+              <div>📧 Email: <span class="val">charlie@rtarwaygmail.onmicrosoft.com</span></div>
+            </div>
+            <div class="persona-perms">
+              <div>&bull; <b>Azure Storage</b>: Reader on <code>app1</code> & <code>app2</code></div>
+              <div>&bull; <b>Microsoft Graph</b>: <span style="color: var(--danger); font-weight: bold;">NO Mail.Send Scope</span></div>
+              <div>&bull; <b>Keycloak Scopes</b>: <code>mcp:tool1</code>, <code>mcp:tool2</code> (No Mail.Send)</div>
+              <div style="margin-top: 6px; font-size: 11px; color: var(--text-muted);">
+                Runs Scenario G: permitted on app1/app2 & redaction, but <b style="color:var(--danger)">strictly blocked at Step 4 (403 Forbidden, zero emails sent)</b>.
+              </div>
+            </div>
+          </div>
+          <button class="btn-login-card btn-login-charlie" onclick="doLogin('charlie', 'Password123!')">
+            🚀 1-Click Login as Charlie
+          </button>
+        </div>
+      </div>
+
+      <!-- Optional Manual Login Form -->
+      <details style="background: var(--card-bg); border: 1px solid var(--border); border-radius: 8px; padding: 14px; max-width: 500px; margin: 0 auto;">
+        <summary style="cursor: pointer; font-size: 13px; color: var(--text-muted); font-weight: 600;">
+          ✍️ Or Sign In with Custom Credentials Manually
+        </summary>
+        <form onsubmit="handleManualLogin(event)" style="margin-top: 14px; display: flex; flex-direction: column; gap: 10px;">
+          <div>
+            <label style="font-size: 11px; color: var(--text-muted); font-weight: 600;">Username:</label>
+            <input type="text" id="manual-username" placeholder="alice, bob, or charlie" style="width: 100%; padding: 8px; border-radius: 4px; border: 1px solid var(--border); background: var(--code-bg); color: var(--text); font-size: 13px;" required />
+          </div>
+          <div>
+            <label style="font-size: 11px; color: var(--text-muted); font-weight: 600;">Password:</label>
+            <input type="password" id="manual-password" value="Password123!" style="width: 100%; padding: 8px; border-radius: 4px; border: 1px solid var(--border); background: var(--code-bg); color: var(--text); font-size: 13px;" required />
+          </div>
+          <button type="submit" class="btn btn-primary" style="margin-top: 6px;">Sign In</button>
+        </form>
+      </details>
+    </div>
+
+    <!-- ============================================================= -->
+    <!-- SCREEN 2: POST-LOGIN AGENTIC DASHBOARD & TOKEN INSPECTOR -->
+    <!-- ============================================================= -->
+    <div id="dashboard-screen" style="display: none;">
+      <div class="grid">
+        <!-- Left Column: User & Auth Matrix -->
+        <div>
+          <!-- Section 1: Active Identity & Dual Token Inspector -->
+          <div class="card">
+            <h2>
+              <span>1. Active Identity & Dual Tokens</span>
+              <span id="active-user-badge" class="role-badge role-admin">Alice</span>
+            </h2>
+
+            <!-- Quick Switcher Bar inside Dashboard -->
+            <div style="display: flex; gap: 6px; margin-bottom: 12px;">
+              <button id="dash-btn-alice" class="btn" style="flex: 1; font-size: 11px; padding: 6px;" onclick="doLogin('alice')">
+                Alice (Full)
+              </button>
+              <button id="dash-btn-bob" class="btn" style="flex: 1; font-size: 11px; padding: 6px;" onclick="doLogin('bob')">
+                Bob (App2 Only)
+              </button>
+              <button id="dash-btn-charlie" class="btn" style="flex: 1; font-size: 11px; padding: 6px;" onclick="doLogin('charlie')">
+                Charlie (No Mail)
+              </button>
+            </div>
+
+            <!-- Active User Metadata Pill -->
+            <div id="user-info" class="user-pill">
+              <div style="font-weight: 600; font-size: 13px;" id="user-name"></div>
+              <div style="color: var(--text-muted); font-size: 12px; margin-top: 2px;" id="user-email"></div>
+              <div style="margin-top: 6px; font-size: 11px;">
+                <b>Allowed Scopes:</b> <span style="color: var(--primary);" id="user-scopes"></span>
+              </div>
+              <div style="margin-top: 4px; font-size: 11px;">
+                <b>Azure Role:</b> <span style="color: var(--success);" id="user-azure-role"></span>
+              </div>
+            </div>
+
+            <!-- DUAL TOKEN DISPLAY: Keycloak OIDC Token -->
+            <div class="token-card" style="border-left: 4px solid #6366f1;">
+              <div class="token-card-header">
+                <span style="color: #a5b4fc; display: flex; align-items: center; gap: 6px;">
+                  🛡️ Keycloak OIDC Bearer Token
+                </span>
+                <span class="token-badge-keycloak">KEYCLOAK OIDC</span>
+              </div>
+              <div style="font-size: 11px; color: var(--text-muted); margin-bottom: 6px;">
+                Issuer: <code id="kc-iss" style="color: #cbd5e1;">http://localhost:8080/realms/azure-wif-realm</code>
+              </div>
+              <details open style="margin-top: 6px;">
+                <summary style="cursor: pointer; font-size: 11px; font-weight: 600; color: #a5b4fc;">
+                  📜 Decoded Keycloak Claims (Roles & Scopes)
+                </summary>
+                <pre id="kc-decoded" style="color: #a5b4fc; max-height: 140px; overflow-y: auto; margin-top: 4px;"></pre>
+              </details>
+              <details style="margin-top: 4px;">
+                <summary style="cursor: pointer; font-size: 10px; color: var(--text-muted);">
+                  🔑 Raw Keycloak JWT String
+                </summary>
+                <pre id="kc-raw" style="color: #94a3b8; font-size: 9px; max-height: 80px; overflow-y: auto; margin-top: 4px;"></pre>
+              </details>
+            </div>
+
+            <!-- DUAL TOKEN DISPLAY: Microsoft Entra ID Token -->
+            <div class="token-card" style="border-left: 4px solid #0284c7;">
+              <div class="token-card-header">
+                <span style="color: var(--primary); display: flex; align-items: center; gap: 6px;">
+                  ☁️ Microsoft Entra ID User Subject Token
+                </span>
+                <span class="token-badge-entra">ENTRA ID</span>
+              </div>
+              <div style="font-size: 11px; color: var(--text-muted); margin-bottom: 6px;">
+                Tenant: <code id="entra-tid" style="color: #cbd5e1;">81f26b58-159c-4879-80a0-bab30b5b4dd3</code>
+              </div>
+              <details open style="margin-top: 6px;">
+                <summary style="cursor: pointer; font-size: 11px; font-weight: 600; color: var(--primary);">
+                  📜 Decoded Entra ID Claims (AppId, Roles, scp)
+                </summary>
+                <pre id="entra-decoded" style="color: #38bdf8; max-height: 140px; overflow-y: auto; margin-top: 4px;"></pre>
+              </details>
+              <details style="margin-top: 4px;">
+                <summary style="cursor: pointer; font-size: 10px; color: var(--text-muted);">
+                  🔑 Raw Entra ID JWT String
+                </summary>
+                <pre id="entra-raw" style="color: #94a3b8; font-size: 9px; max-height: 80px; overflow-y: auto; margin-top: 4px;"></pre>
+              </details>
+            </div>
+          </div>
+
+          <!-- Section 2: Azure Cloud RBAC & Security Matrix -->
+          <div class="card">
+            <h2>2. Azure Cloud RBAC & Security Matrix</h2>
+            <div style="font-size: 12px; color: var(--text-muted); line-height: 1.6;">
+              <div>&bull; <b>Tenant ID</b>: <code>81f26b58-159c-4879-80a0-bab30b5b4dd3</code></div>
+              <div>&bull; <b>Verified Domain</b>: <code>rtarwaygmail.onmicrosoft.com</code></div>
+              <div>&bull; <b>Storage Account</b>: <code>azwifstoragepocrt</code></div>
+              <div>&bull; <b>Root Account Keys</b>: <span style="color: var(--danger); font-weight: bold;">PERMANENTLY DELETED</span></div>
+              <div>&bull; <b>Container <code>app1</code></b>: Alice & Charlie (Reader) | <b style="color:var(--danger)">Bob: NO ACCESS (HTTP 403)</b></div>
+              <div>&bull; <b>Container <code>app2</code></b>: Alice, Bob & Charlie (Contributor / Reader)</div>
+              <div>&bull; <b>Microsoft Graph</b>: Alice (<span style="color:var(--success)">Mail.Send Authorized</span>) | Charlie & Bob (<b style="color:var(--danger)">Zero Graph Access</b>)</div>
+              <div>&bull; <b>Delegation Protocol</b>: RFC 8693 (OAuth 2.0 Token Exchange) with recursive <code>act</code> claims</div>
+            </div>
+          </div>
+
+          <!-- Section 3: Live Email Dispatch Settings -->
+          <div class="card" style="border-left: 4px solid var(--purple);">
+            <h2>3. Live Email Dispatch (Option 1)</h2>
+            <div style="font-size: 12px; color: var(--text-muted); margin-bottom: 8px;">
+              Delivers physical email directly to <code>rtarway@gmail.com</code> when Step 4 is authorized.
+            </div>
+            <div style="margin-bottom: 8px;">
+              <label style="font-size: 11px; font-weight: 600; color: var(--text-muted);">Provider:</label>
+              <select id="email-provider" style="width: 100%; padding: 6px; border-radius: 4px; border: 1px solid var(--border); font-size: 12px; background: var(--bg-card); color: var(--text);">
+                <option value="resend">Resend (re_... / 100 free emails/day)</option>
+                <option value="sendgrid">SendGrid (SG... / 100 free emails/day)</option>
+              </select>
+            </div>
+            <div style="margin-bottom: 8px;">
+              <label style="font-size: 11px; font-weight: 600; color: var(--text-muted);">API Key (Stored only in local browser session):</label>
+              <input type="password" id="email-api-key" placeholder="Enter re_... or SG... key" style="width: 100%; padding: 6px; border-radius: 4px; border: 1px solid var(--border); font-size: 12px; box-sizing: border-box;" />
+            </div>
+            <div style="font-size: 10px; color: var(--text-muted);">
+              💡 Can also be set globally via <code>RESEND_API_KEY</code> or <code>SENDGRID_API_KEY</code> in environment.
+            </div>
+          </div>
+        </div>
+
+        <!-- Right Column: Agent Prompt & Live Hop-to-Hop Trace -->
+        <div>
+          <div class="card">
+            <h2>3. Agent Prompt & Intent Execution</h2>
+            <div class="quick-prompts">
+              <button class="quick-btn" onclick="setPrompt('Write new deployment status report to app2')">
+                <div>⚡ <b>Scenario A (Tool1)</b>: Write deployment status report to app2</div>
+                <div class="desc">Target: <code>app2</code> container &bull; Permitted for Bob & Alice via Storage Blob Data Contributor</div>
+              </button>
+              <button class="quick-btn" onclick="setPrompt('Read quarterly financial report from app1')">
+                <div>⚡ <b>Scenario B (Tool1)</b>: Read financial data from app1</div>
+                <div class="desc">Target: <code>app1</code> container &bull; Allowed for Alice & Charlie (Reader) &bull; <b style="color:var(--danger)">HTTP 403 Cloud IAM Denied for Bob</b></div>
+              </button>
+              <button class="quick-btn" onclick="setPrompt('Audit app1 compliance records with tool2')">
+                <div>⚡ <b>Scenario C (Tool2)</b>: Audit app1 compliance records with tool2</div>
+                <div class="desc">Target: <code>tool2</code> &bull; Allowed for Alice & Charlie (Admin/Auditor scope) &bull; <b style="color:var(--warning)">Blocked for Bob (Tool RBAC)</b></div>
+              </button>
+              <button class="quick-btn" onclick="setPrompt('Inject untrusted rogue actor into RFC 8693 act claim')">
+                <div>🚨 <b>Scenario D (Security)</b>: Inject untrusted rogue actor into RFC 8693 act claim</div>
+                <div class="desc">Tests in-band recursive verification &bull; <b style="color:var(--danger)">Cryptographically Rejected (HTTP 401/403)</b></div>
+              </button>
+              <button class="quick-btn" onclick="setPrompt('Overwrite compliance.txt (In-Process FGP violation)')">
+                <div>🛡️ <b>Scenario E (Fine-Grained Policy)</b>: Overwrite compliance.txt in app1</div>
+                <div class="desc">Target: <code>compliance.txt</code> &bull; <b style="color:var(--danger)">Blocked by Declarative tools.yaml FGP immutability</b></div>
+              </button>
+              <button class="quick-btn" style="border-left: 4px solid var(--purple); background: rgba(168, 85, 247, 0.08);" onclick="loginAndRunPipeline('alice')">
+                <div>🔄 <b>Scenario F (Multi-Hop Authorized)</b>: Alice reads app1 + app2, redacts, and emails via Microsoft Graph</div>
+                <div class="desc">App1 (Reader) ➔ App2 (Metrics) ➔ LLM Redaction ➔ Graph API to <code>rtarway@gmail.com</code> &bull; <b style="color:var(--primary)">Permitted for Alice (Reader + Mail.Send)</b></div>
+              </button>
+              <button class="quick-btn" style="border-left: 4px solid var(--danger); background: rgba(239, 68, 68, 0.06);" onclick="loginAndRunPipeline('charlie')">
+                <div>🚫 <b>Scenario G (3rd User Charlie: NO Graph Permission)</b>: Charlie executes pipeline without Mail.Send</div>
+                <div class="desc">App1 (✅ 200) ➔ App2 (✅ 200) ➔ Redaction (✅) ➔ <b style="color:var(--danger)">Graph API Blocked: 403 Forbidden (Zero Email Sent)</b></div>
+              </button>
+              <button class="quick-btn" style="border-left: 4px solid var(--purple); background: rgba(168, 85, 247, 0.08);" onclick="setPrompt('Correlate Azure financial report from app1 with GCP BigQuery regional sales telemetry')">
+                <div>🌐 <b>Scenario H (Multi-Cloud Cross-Cloud Pipeline)</b>: Correlate Azure Storage + GCP BigQuery</div>
+                <div class="desc">Azure app1 (Hop 1) ➔ LLM Turn 2 ➔ GCP BigQuery (Hop 2 with recursive <code>act</code>) ➔ Cross-Cloud Redaction (Turn 3)</div>
+              </button>
+              <button class="quick-btn" style="border-left: 4px solid #ea4335; background: rgba(234, 67, 53, 0.08);" onclick="setPrompt('Query BigQuery sales in north-america')">
+                <div>📊 <b>Scenario I (GCP BigQuery Direct Analytics)</b>: Query regional sales metrics</div>
+                <div class="desc">Target: GCP BigQuery <code>analytics_data.regional_sales</code> &bull; Permitted for Bob & Alice with <code>mcp:bigquery:query</code></div>
+              </button>
+              <button class="quick-btn" style="border-left: 4px solid #ea4335; background: rgba(234, 67, 53, 0.08);" onclick="setPrompt('Run BigQuery audit compliance query')">
+                <div>🛡️ <b>Scenario J (GCP BigQuery Audit & Compliance)</b>: Query audit logs (Admin Only vs Bob Denial)</div>
+                <div class="desc">Target: GCP BigQuery <code>audit_logs</code> &bull; Permitted for Alice (Admin) &bull; <b style="color:var(--danger)">Denied for Bob (HTTP 403 / No Scope)</b></div>
+              </button>
+            </div>
+
+            <label style="font-size: 12px; color: var(--text-muted);">Custom User Prompt:</label>
+            <textarea id="prompt-input" placeholder="Type instructions for the agent..."></textarea>
+            <button class="btn btn-primary" style="width: 100%;" onclick="submitPrompt()">
+              🚀 Submit Prompt to Agent Orchestrator
+            </button>
+          </div>
+
+          <div class="card">
+            <h2>
+              <span>4. Hop-to-Hop Token Propagation & Delegation Chain</span>
+              <span id="status-indicator"></span>
+            </h2>
+
+            <div id="results-container" style="display: none;">
+              <!-- Multi-Hop Autonomous Pipeline Execution Tracker -->
+              <div id="multihop-tracker" style="display: none; background: rgba(168, 85, 247, 0.05); border: 1px solid rgba(168, 85, 247, 0.3); border-radius: 8px; padding: 16px; margin-bottom: 18px;">
+                <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 12px; border-bottom: 1px solid rgba(168, 85, 247, 0.2); padding-bottom: 8px;">
+                  <h3 style="font-size: 14px; color: var(--purple); display: flex; align-items: center; gap: 8px;">
+                    🔄 Multi-Hop Autonomous Agentic Pipeline Execution
+                  </h3>
+                  <span id="multihop-badge" class="status-badge"></span>
+                </div>
+
+                <div style="display: grid; grid-template-columns: repeat(4, 1fr); gap: 10px; margin-bottom: 14px;" id="multihop-steps-grid">
+                  <!-- Step 1 Card -->
+                  <div class="hop-card" id="mh-step1-card" style="padding: 10px;">
+                    <div style="font-size: 11px; font-weight: 700; color: var(--text-muted); margin-bottom: 4px;">STEP 1: APP1 QUERY</div>
+                    <div style="font-size: 12px; font-weight: 600; color: var(--text);" id="mh-step1-title">Tool1 (app1)</div>
+                    <div style="font-size: 10px; margin-top: 4px;" id="mh-step1-status"></div>
+                  </div>
+
+                  <!-- Step 2 Card -->
+                  <div class="hop-card" id="mh-step2-card" style="padding: 10px;">
+                    <div style="font-size: 11px; font-weight: 700; color: var(--text-muted); margin-bottom: 4px;">STEP 2: APP2 QUERY</div>
+                    <div style="font-size: 12px; font-weight: 600; color: var(--text);" id="mh-step2-title">Tool1 (app2)</div>
+                    <div style="font-size: 10px; margin-top: 4px;" id="mh-step2-status"></div>
+                  </div>
+
+                  <!-- Step 3 Card -->
+                  <div class="hop-card" id="mh-step3-card" style="padding: 10px;">
+                    <div style="font-size: 11px; font-weight: 700; color: var(--text-muted); margin-bottom: 4px;">STEP 3: REDACTION</div>
+                    <div style="font-size: 12px; font-weight: 600; color: var(--text);" id="mh-step3-title">LLM Synthesis</div>
+                    <div style="font-size: 10px; margin-top: 4px;" id="mh-step3-status"></div>
+                  </div>
+
+                  <!-- Step 4 Card -->
+                  <div class="hop-card" id="mh-step4-card" style="padding: 10px;">
+                    <div style="font-size: 11px; font-weight: 700; color: var(--text-muted); margin-bottom: 4px;">STEP 4: DIRECT GRAPH</div>
+                    <div style="font-size: 12px; font-weight: 600; color: var(--text);" id="mh-step4-title">Direct Graph (Mail.Send)</div>
+                    <div style="font-size: 10px; margin-top: 4px;" id="mh-step4-status"></div>
+                  </div>
+                </div>
+
+                <!-- Collapsible Turn-by-Turn Agent Reasoning & Hop Trace -->
+                <details id="multihop-turns-details" style="background: var(--card-sub-bg); border: 1px solid var(--border); border-radius: 6px; padding: 10px; margin-bottom: 10px;" open>
+                  <summary style="cursor: pointer; font-size: 12px; font-weight: 600; color: var(--purple); outline: none;">
+                    🧭 Turn-by-Turn Multi-Hop LLM Decision & Token Delegation Trace
+                  </summary>
+                  <div id="mh-turns-container" style="margin-top: 10px;"></div>
+                </details>
+
+                <!-- Collapsible Redaction & Synthesis Inspector -->
+                <details id="multihop-redaction-details" style="background: var(--card-sub-bg); border: 1px solid var(--border); border-radius: 6px; padding: 10px; margin-bottom: 10px;" open>
+                  <summary style="cursor: pointer; font-size: 12px; font-weight: 600; color: var(--purple); outline: none;">
+                    🛡️ LLM Sensitive Data Redaction & Executive Report Inspector
+                  </summary>
+                  <div style="margin-top: 8px;">
+                    <div style="font-size: 11px; color: var(--text-muted); margin-bottom: 4px;">Redactions Enforced by LLM Engine:</div>
+                    <div id="mh-redactions-list" style="font-size: 11px; color: var(--warning); margin-bottom: 8px;"></div>
+                    <div style="font-size: 11px; color: var(--text-muted); margin-bottom: 4px;">Sanitized Email Body Sent via Microsoft Graph (to rtarway@gmail.com):</div>
+                    <pre id="mh-sanitized-body" style="font-size: 11px; color: #38bdf8; max-height: 180px; overflow-y: auto;"></pre>
+                  </div>
+                </details>
+              </div>
+
+              <div class="pipeline-container">
+                <!-- Hop 1: Human User -->
+                <div class="hop-card info" id="card-hop1">
+                  <div class="hop-header">
+                    <div class="hop-title">
+                      <span>👤 Hop 1: Human User Keycloak / Entra Token</span>
+                      <span class="hop-tag tag-jwt">Subject Token</span>
+                    </div>
+                    <span class="status-badge status-success" id="hop1-status">AUTHENTICATED</span>
+                  </div>
+                  <div class="claim-grid">
+                    <div class="claim-label">Subject (sub):</div>
+                    <div class="claim-value claim-highlight" id="hop1-sub"></div>
+                    <div class="claim-label">Email:</div>
+                    <div class="claim-value" id="hop1-email"></div>
+                    <div class="claim-label">Entra Roles:</div>
+                    <div class="claim-value" id="hop1-roles"></div>
+                    <div class="claim-label">OAuth Scopes:</div>
+                    <div class="claim-value" id="hop1-scopes"></div>
+                    <div class="claim-label">Token Issuer (iss):</div>
+                    <div class="claim-value" id="hop1-iss"></div>
+                  </div>
+                  <details open style="margin-top: 10px;">
+                    <summary style="cursor: pointer; font-size: 11px; font-weight: 600; color: var(--primary); outline: none;">📜 Decoded Readable Token (Header & Claims Payload)</summary>
+                    <pre id="hop1-decoded" style="margin-top: 6px;"></pre>
+                  </details>
+                  <details style="margin-top: 6px;">
+                    <summary style="cursor: pointer; font-size: 10px; color: var(--text-muted); outline: none;">🔑 View Raw Encoded Bearer JWT</summary>
+                    <pre id="hop1-raw" style="font-size: 10px; color: #94a3b8; word-break: break-all; margin-top: 4px;"></pre>
+                  </details>
+                </div>
+
+                <!-- Hop 2: Agent SPIRE Workload Identity -->
+                <div class="hop-card info" id="card-hop2">
+                  <div class="hop-header">
+                    <div class="hop-title">
+                      <span>🤖 Hop 2: Agent Workload Identity (SPIRE SVID)</span>
+                      <span class="hop-tag tag-spiffe">Actor Identity</span>
+                    </div>
+                    <span class="status-badge status-success" id="hop2-status">SPIFFE VERIFIED</span>
+                  </div>
+                  <div class="claim-grid">
+                    <div class="claim-label">SPIFFE ID:</div>
+                    <div class="claim-value claim-highlight" id="hop2-spiffeid"></div>
+                    <div class="claim-label">Intended Audience:</div>
+                    <div class="claim-value" id="hop2-audience"></div>
+                    <div class="claim-label">Assertion Method:</div>
+                    <div class="claim-value" id="hop2-method"></div>
+                    <div class="claim-label">LLM Plan & Intent:</div>
+                    <div class="claim-value" id="hop2-plan"></div>
+                  </div>
+                  <details open style="margin-top: 10px;">
+                    <summary style="cursor: pointer; font-size: 11px; font-weight: 600; color: var(--primary); outline: none;">📜 Decoded Readable SPIFFE SVID Assertion (Workload Claims)</summary>
+                    <pre id="hop2-decoded" style="margin-top: 6px;"></pre>
+                  </details>
+                  <details style="margin-top: 6px;">
+                    <summary style="cursor: pointer; font-size: 10px; color: var(--text-muted); outline: none;">🔑 View Raw Encoded SVID JWT</summary>
+                    <pre id="hop2-raw" style="font-size: 10px; color: #94a3b8; word-break: break-all; margin-top: 4px;"></pre>
+                  </details>
+                </div>
+
+                <!-- Hop 3: RFC 8693 Delegated Token -->
+                <div class="hop-card" id="card-hop3">
+                  <div class="hop-header">
+                    <div class="hop-title">
+                      <span>🔗 Hop 3: RFC 8693 Downscoped Delegated Token (Orchestrator ➔ MCP)</span>
+                      <span class="hop-tag tag-rfc8693">OBO Exchange</span>
+                    </div>
+                    <span class="status-badge" id="hop3-status"></span>
+                  </div>
+                  <div class="claim-grid">
+                    <div class="claim-label">Delegated Subject (sub):</div>
+                    <div class="claim-value" id="hop3-sub"></div>
+                    <div class="claim-label">Target Audience (aud):</div>
+                    <div class="claim-value" id="hop3-aud"></div>
+                    <div class="claim-label">Downscoped Scope:</div>
+                    <div class="claim-value claim-highlight" id="hop3-scope"></div>
+                    <div class="claim-label">Token TTL:</div>
+                    <div class="claim-value" id="hop3-ttl"></div>
+                    <div class="claim-label">RFC 8693 act Claim:</div>
+                    <div class="claim-value">
+                      <div class="claim-act-box" id="hop3-act-box">
+                        <div style="font-size: 11px; color: var(--text-muted); margin-bottom: 4px;">Cryptographically Verifiable Actor Chain:</div>
+                        <pre id="hop3-act" style="margin: 0; padding: 6px;"></pre>
+                      </div>
+                    </div>
+                  </div>
+                  <details open style="margin-top: 10px;">
+                    <summary style="cursor: pointer; font-size: 11px; font-weight: 600; color: var(--primary); outline: none;">📜 Decoded RFC 8693 Delegated Token (Full Claims with act chain)</summary>
+                    <pre id="hop3-decoded" style="margin-top: 6px;"></pre>
+                  </details>
+                  <details style="margin-top: 6px;">
+                    <summary style="cursor: pointer; font-size: 10px; color: var(--text-muted); outline: none;">🔑 View Raw Encoded RFC 8693 Token</summary>
+                    <pre id="hop3-raw" style="font-size: 10px; color: #94a3b8; word-break: break-all; margin-top: 4px;"></pre>
+                  </details>
+                </div>
+
+                <!-- Hop 4: Azure User-Delegation Storage Token -->
+                <div class="hop-card" id="card-hop4">
+                  <div class="hop-header">
+                    <div class="hop-title">
+                      <span>☁️ Hop 4: 60s JIT User-Delegation Token (MCP ➔ Azure Storage)</span>
+                      <span class="hop-tag tag-azure">Cloud IAM Kernel</span>
+                    </div>
+                    <span class="status-badge" id="hop4-status"></span>
+                  </div>
+                  <div class="claim-grid">
+                    <div class="claim-label">Credential Type:</div>
+                    <div class="claim-value" id="hop4-cred-type"></div>
+                    <div class="claim-label">Credential TTL:</div>
+                    <div class="claim-value claim-highlight" id="hop4-ttl"></div>
+                    <div class="claim-label">Target Resource:</div>
+                    <div class="claim-value" id="hop4-resource"></div>
+                    <div class="claim-label">Storage Account:</div>
+                    <div class="claim-value" id="hop4-account"></div>
+                    <div class="claim-label">Chain Fingerprint:</div>
+                    <div class="claim-value" id="hop4-binding"></div>
+                    <div class="claim-label">Cloud IAM Decision:</div>
+                    <div class="claim-value" id="hop4-decision"></div>
+                  </div>
+                  <details open style="margin-top: 10px;">
+                    <summary style="cursor: pointer; font-size: 11px; font-weight: 600; color: var(--primary); outline: none;">📜 Decoded 60s JIT User-Delegation Storage Credential & IAM Audit</summary>
+                    <pre id="hop4-decoded" style="margin-top: 6px;"></pre>
+                  </details>
+                  <details style="margin-top: 6px;">
+                    <summary style="cursor: pointer; font-size: 10px; color: var(--text-muted); outline: none;">🔑 View Storage Request Header & Signature</summary>
+                    <pre id="hop4-raw" style="font-size: 10px; color: #94a3b8; word-break: break-all; margin-top: 4px;"></pre>
+                  </details>
+                </div>
+
+                <!-- Hop 5: RFC 8693 Delegated Token for Microsoft Graph -->
+                <div class="hop-card" id="card-hop5" style="display: none;">
+                  <div class="hop-header">
+                    <div class="hop-title">
+                      <span>🌐 Hop 5: RFC 8693 Delegated Token (Orchestrator ➔ Microsoft Graph)</span>
+                      <span class="hop-tag tag-rfc8693">OBO Graph Token</span>
+                    </div>
+                    <span class="status-badge" id="hop5-status"></span>
+                  </div>
+                  <div class="claim-grid">
+                    <div class="claim-label">Delegated Subject (sub):</div>
+                    <div class="claim-value" id="hop5-sub"></div>
+                    <div class="claim-label">Target Audience (aud):</div>
+                    <div class="claim-value claim-highlight" id="hop5-aud">https://graph.microsoft.com</div>
+                    <div class="claim-label">Downscoped Scope:</div>
+                    <div class="claim-value claim-highlight" id="hop5-scope">Mail.Send</div>
+                    <div class="claim-label">Token TTL:</div>
+                    <div class="claim-value" id="hop5-ttl">300s (Short-Lived Downscoped)</div>
+                    <div class="claim-label">RFC 8693 act Claim:</div>
+                    <div class="claim-value">
+                      <div class="claim-act-box" id="hop5-act-box">
+                        <div style="font-size: 11px; color: var(--text-muted); margin-bottom: 4px;">Cryptographically Verifiable Actor Chain:</div>
+                        <pre id="hop5-act" style="margin: 0; padding: 6px;"></pre>
+                      </div>
+                    </div>
+                  </div>
+                  <details open style="margin-top: 10px;">
+                    <summary style="cursor: pointer; font-size: 11px; font-weight: 600; color: var(--primary); outline: none;">📜 Decoded RFC 8693 Microsoft Graph Delegated Token (Full Claims with act chain)</summary>
+                    <pre id="hop5-decoded" style="margin-top: 6px;"></pre>
+                  </details>
+                  <details style="margin-top: 6px;">
+                    <summary style="cursor: pointer; font-size: 10px; color: var(--text-muted); outline: none;">🔑 View Raw Encoded RFC 8693 Graph Token</summary>
+                    <pre id="hop5-raw" style="font-size: 10px; color: #94a3b8; word-break: break-all; margin-top: 4px;"></pre>
+                  </details>
+                </div>
+
+                <!-- Hop 6: Direct Microsoft Graph API Execution -->
+                <div class="hop-card" id="card-hop6" style="display: none;">
+                  <div class="hop-header">
+                    <div class="hop-title">
+                      <span>📧 Hop 6: Direct Microsoft Graph API Execution (Orchestrator ➔ Graph API)</span>
+                      <span class="hop-tag tag-azure">Direct Dispatch</span>
+                    </div>
+                    <span class="status-badge" id="hop6-status"></span>
+                  </div>
+                  <div class="claim-grid">
+                    <div class="claim-label">Direct Invoker:</div>
+                    <div class="claim-value claim-highlight" id="hop6-invoker">agent-orchestrator (Azure Storage MCP Server Bypassed)</div>
+                    <div class="claim-label">Target Endpoint:</div>
+                    <div class="claim-value" id="hop6-endpoint">POST https://graph.microsoft.com/v1.0/me/sendMail</div>
+                    <div class="claim-label">Authorized Recipient:</div>
+                    <div class="claim-value claim-highlight" id="hop6-recipient">rtarway@gmail.com</div>
+                    <div class="claim-label">Graph API Decision:</div>
+                    <div class="claim-value" id="hop6-decision"></div>
+                    <div class="claim-label">Option 1 Delivery Relay:</div>
+                    <div class="claim-value" id="hop6-relay"></div>
+                  </div>
+                  <details open style="margin-top: 10px;">
+                    <summary style="cursor: pointer; font-size: 11px; font-weight: 600; color: var(--primary); outline: none;">📜 Decoded Graph API Response & Delivery Audit</summary>
+                    <pre id="hop6-decoded" style="margin-top: 6px;"></pre>
+                  </details>
+                  <details style="margin-top: 6px;">
+                    <summary style="cursor: pointer; font-size: 10px; color: var(--text-muted); outline: none;">🔑 View Outbound Graph Request Headers & Bearer Token</summary>
+                    <pre id="hop6-raw" style="font-size: 10px; color: #94a3b8; word-break: break-all; margin-top: 4px;"></pre>
+                  </details>
+                </div>
+              </div>
+
+              <!-- Execution Result Audit Box -->
+              <div style="margin-top: 14px;">
+                <h3 style="font-size: 13px; color: var(--text-muted); margin-bottom: 6px;">MCP Execution & Cloud IAM Audit Log:</h3>
+                <pre id="trace-mcp"></pre>
+              </div>
+            </div>
+
+            <div id="empty-state" style="color: var(--text-muted); font-size: 13px; text-align: center; padding: 40px;">
+              Select a scenario above to inspect real-time RFC 8693 token propagation and cryptographic delegation chain.
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <script>
+    let currentToken = null; // Keycloak Bearer Token passed to Orchestrator
+    let currentKeycloakToken = null;
+    let currentEntraToken = null;
+    let currentUser = null;
+
+    // Helper: Decode client-side JWT claims payload safely
+    function parseJwt(token) {
+      if (!token) return null;
+      try {
+        const parts = token.split('.');
+        if (parts.length < 2) return null;
+        const base64Url = parts[1];
+        const base64 = base64Url.replace(/-/g, '+').replace(/_/g, '/');
+        const jsonPayload = decodeURIComponent(atob(base64).split('').map(c => {
+          return '%' + ('00' + c.charCodeAt(0).toString(16)).slice(-2);
+        }).join(''));
+        return JSON.parse(jsonPayload);
+      } catch (e) {
+        console.warn('Could not parse JWT client-side', e);
+        return null;
+      }
+    }
+
+    function toggleArchModal() {
+      const modal = document.getElementById('arch-modal');
+      if (!modal) return;
+      modal.style.display = modal.style.display === 'none' ? 'block' : 'none';
+    }
+
+    // 1-Click Login / Authentication Dispatcher
+    async function doLogin(userType, password = 'Password123!') {
+      try {
+        const res = await fetch('/api/login', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ userType, username: userType, password })
+        });
+        const data = await res.json();
+        
+        if (!data.authenticated) {
+          alert('Login failed: Invalid credentials');
+          return;
+        }
+
+        currentUser = data.user;
+        currentKeycloakToken = data.keycloakToken || data.token;
+        currentEntraToken = data.entraToken;
+        currentToken = currentKeycloakToken;
+
+        // Transition from Login Screen to Dashboard
+        document.getElementById('login-screen').style.display = 'none';
+        document.getElementById('dashboard-screen').style.display = 'block';
+        document.getElementById('header-user-status').style.display = 'flex';
+
+        updateDashboardUserView();
+      } catch (err) {
+        alert('Login failed: ' + err.message);
+      }
+    }
+
+    // Manual Form Submission
+    function handleManualLogin(e) {
+      e.preventDefault();
+      const u = document.getElementById('manual-username').value.trim();
+      const p = document.getElementById('manual-password').value;
+      if (!u) return;
+      doLogin(u, p);
+    }
+
+    // Logout / Switch User back to Login Screen
+    function logout() {
+      currentUser = null;
+      currentToken = null;
+      currentKeycloakToken = null;
+      currentEntraToken = null;
+
+      document.getElementById('dashboard-screen').style.display = 'none';
+      document.getElementById('header-user-status').style.display = 'none';
+      document.getElementById('login-screen').style.display = 'block';
+      document.getElementById('empty-state').style.display = 'block';
+      document.getElementById('results-container').style.display = 'none';
+    }
+
+    // Update Dashboard UI with both Keycloak and Entra ID tokens
+    function updateDashboardUserView() {
+      if (!currentUser) return;
+
+      const userType = currentUser.username;
+      
+      // Update header badge
+      document.getElementById('header-user-badge').textContent = `Logged in as ${currentUser.displayName.split(' ')[0]}`;
+
+      // Update inner switcher buttons
+      document.querySelectorAll('#dash-btn-alice, #dash-btn-bob, #dash-btn-charlie').forEach(b => b.classList.remove('btn-active'));
+      const activeBtnId = userType === 'alice' ? 'dash-btn-alice' : (userType === 'bob' ? 'dash-btn-bob' : 'dash-btn-charlie');
+      const activeBtn = document.getElementById(activeBtnId);
+      if (activeBtn) activeBtn.classList.add('btn-active');
+
+      // Update Active User Card
+      const userBadge = document.getElementById('active-user-badge');
+      if (userType === 'alice') {
+        userBadge.className = 'role-badge role-admin';
+        userBadge.textContent = 'Alice (Admin/Reader + Mail.Send)';
+      } else if (userType === 'bob') {
+        userBadge.className = 'role-badge role-regular';
+        userBadge.textContent = 'Bob (Contributor on app2)';
+      } else {
+        userBadge.className = 'role-badge role-charlie';
+        userBadge.textContent = 'Charlie (Reader / NO Mail.Send)';
+      }
+
+      document.getElementById('user-name').textContent = currentUser.displayName;
+      document.getElementById('user-email').textContent = currentUser.email;
+      document.getElementById('user-scopes').textContent = currentUser.scopes.join(', ');
+      document.getElementById('user-azure-role').textContent = currentUser.azureRole || 'N/A';
+
+      // Parse & Display Keycloak Token
+      const kcDecoded = parseJwt(currentKeycloakToken) || {
+        iss: 'http://localhost:8080/realms/azure-wif-realm',
+        sub: currentUser.email,
+        roles: currentUser.roles,
+        scope: currentUser.scopes.join(' ')
+      };
+      document.getElementById('kc-iss').textContent = kcDecoded.iss || 'http://localhost:8080/realms/azure-wif-realm';
+      document.getElementById('kc-decoded').textContent = JSON.stringify(kcDecoded, null, 2);
+      document.getElementById('kc-raw').textContent = currentKeycloakToken || 'N/A';
+
+      // Parse & Display Microsoft Entra ID Token
+      const entraDecoded = parseJwt(currentEntraToken) || {
+        iss: 'https://login.microsoftonline.com/81f26b58-159c-4879-80a0-bab30b5b4dd3/v2.0',
+        tid: '81f26b58-159c-4879-80a0-bab30b5b4dd3',
+        appid: 'a23206e1-2dda-4854-aac7-0536d2da2c4c',
+        sub: currentUser.email,
+        roles: currentUser.roles,
+        scp: currentUser.scopes.join(' ')
+      };
+      document.getElementById('entra-tid').textContent = entraDecoded.tid || '81f26b58-159c-4879-80a0-bab30b5b4dd3';
+      document.getElementById('entra-decoded').textContent = JSON.stringify(entraDecoded, null, 2);
+      document.getElementById('entra-raw').textContent = currentEntraToken || 'N/A';
+    }
+
+    async function loginAndRunPipeline(userType) {
+      await doLogin(userType);
+      setPrompt('Read app1 financial report and app2 metrics, redact sensitive info, and email summary via Microsoft Graph to rtarway@gmail.com');
+      submitPrompt();
+    }
+
+    function setPrompt(text) {
+      document.getElementById('prompt-input').value = text;
+    }
+
+    async function submitPrompt() {
+      if (!currentToken) {
+        alert('Please login first.');
+        return;
+      }
+
+      const prompt = document.getElementById('prompt-input').value.trim();
+      if (!prompt) {
+        alert('Please enter a prompt.');
+        return;
+      }
+
+      const emailProvider = document.getElementById('email-provider')?.value;
+      const emailApiKey = document.getElementById('email-api-key')?.value.trim();
+      const emailConfig = {};
+      if (emailApiKey) {
+        if (emailProvider === 'sendgrid') emailConfig.sendgridApiKey = emailApiKey;
+        else emailConfig.resendApiKey = emailApiKey;
+      }
+
+      document.getElementById('empty-state').style.display = 'none';
+      document.getElementById('results-container').style.display = 'block';
+      document.getElementById('status-indicator').innerHTML = '<span style="color: var(--primary); font-size: 12px;">Agent reasoning & delegating...</span>';
+
+      try {
+        const res = await fetch('/api/chat', {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            'Authorization': `Bearer ${currentToken}`
+          },
+          body: JSON.stringify({ prompt, token: currentToken, emailConfig })
+        });
+
+        const data = await res.json();
+        const hop = data.hopToHop || {};
+        const isError = data.mcpResponse?.isError;
+        const isRogue = prompt.toLowerCase().includes('rogue actor') || prompt.toLowerCase().includes('tamper');
+
+        // Render Multi-Hop Pipeline Execution Tracker if active
+        const mh = data.multiHopExecution;
+        const mhTracker = document.getElementById('multihop-tracker');
+        if (mh) {
+          mhTracker.style.display = 'block';
+          const badge = document.getElementById('multihop-badge');
+          badge.className = 'status-badge ' + (mh.completed ? 'status-success' : 'status-failed');
+          badge.textContent = mh.completed ? 'ALL 4 STEPS COMPLETED (HTTP 200 + 202)' : 'HALTED AT STEP ' + mh.executedSteps;
+
+          // Step 1
+          const s1 = mh.steps[0] || {};
+          const s1Card = document.getElementById('mh-step1-card');
+          const s1Ok = s1.status === 'SUCCESS';
+          s1Card.className = 'hop-card ' + (s1Ok ? 'success' : 'denied');
+          document.getElementById('mh-step1-status').innerHTML = s1Ok
+            ? '<span style="color: var(--success); font-weight: bold;">✅ HTTP 200 OK (app1)</span>'
+            : `<span style="color: var(--danger); font-weight: bold;">❌ ${s1.status}</span>`;
+
+          // Step 2
+          const s2 = mh.steps[1] || {};
+          const s2Card = document.getElementById('mh-step2-card');
+          if (mh.executedSteps >= 2) {
+            const s2Ok = s2.status === 'SUCCESS';
+            s2Card.className = 'hop-card ' + (s2Ok ? 'success' : 'denied');
+            document.getElementById('mh-step2-status').innerHTML = s2Ok
+              ? '<span style="color: var(--success); font-weight: bold;">✅ HTTP 200 OK (app2)</span>'
+              : `<span style="color: var(--danger); font-weight: bold;">❌ ${s2.status}</span>`;
+          } else {
+            s2Card.className = 'hop-card';
+            document.getElementById('mh-step2-status').innerHTML = '<span style="color: var(--text-muted);">⏸️ SKIPPED</span>';
+          }
+
+          // Step 3
+          const s3 = mh.steps[2] || {};
+          const s3Card = document.getElementById('mh-step3-card');
+          if (mh.executedSteps >= 3) {
+            s3Card.className = 'hop-card success';
+            document.getElementById('mh-step3-status').innerHTML = `<span style="color: var(--success); font-weight: bold;">✅ ${s3.redactionDetails?.redactionsCount || 4} FIELDS REDACTED</span>`;
+          } else {
+            s3Card.className = 'hop-card';
+            document.getElementById('mh-step3-status').innerHTML = '<span style="color: var(--text-muted);">⏸️ SKIPPED</span>';
+          }
+
+          // Step 4
+          const s4 = mh.steps[3] || {};
+          const s4Card = document.getElementById('mh-step4-card');
+          if (mh.executedSteps >= 4) {
+            const s4Ok = s4.status === 'SUCCESS';
+            s4Card.className = 'hop-card ' + (s4Ok ? 'success' : 'denied');
+
+            let relay = null;
+            try {
+              if (s4.mcpResponse?.content?.[0]?.text) {
+                const parsed = JSON.parse(s4.mcpResponse.content[0].text);
+                relay = parsed.data?.deliveryRelay;
+              }
+            } catch {}
+
+            let relayHtml = '';
+            if (s4Ok) {
+              if (relay?.delivered) {
+                relayHtml = `<div style="font-size: 10px; margin-top: 4px; color: var(--success); font-weight: 600;">📧 Delivered via ${relay.provider} (${relay.messageId || 'OK'})</div>`;
+              } else if (relay?.provider === 'unconfigured') {
+                relayHtml = `<div style="font-size: 10px; margin-top: 4px; color: var(--warning);">⚠️ Graph validated (Set API Key to deliver)</div>`;
+              } else if (relay?.error) {
+                relayHtml = `<div style="font-size: 10px; margin-top: 4px; color: var(--danger);">⚠️ ${relay.provider || 'Relay'}: ${relay.error}</div>`;
+              }
+            } else {
+              relayHtml = `<div style="font-size: 10px; margin-top: 4px; color: var(--danger); font-weight: 600;">🚫 Zero Email Dispatched (Blocked)</div>`;
+            }
+
+            document.getElementById('mh-step4-status').innerHTML = (s4Ok
+              ? '<span style="color: var(--success); font-weight: bold;">✅ HTTP 202 ACCEPTED</span>'
+              : `<span style="color: var(--danger); font-weight: bold;">❌ ${s4.status}</span>`) + relayHtml;
+          } else {
+            s4Card.className = 'hop-card';
+            document.getElementById('mh-step4-status').innerHTML = '<span style="color: var(--text-muted);">⏸️ SKIPPED</span>';
+          }
+
+          // Turn-by-Turn Conversational Reasoning & Delegation Trace
+          const turns = data.conversationalTurns || [];
+          const turnsContainer = document.getElementById('mh-turns-container');
+          if (turns.length > 0 && turnsContainer) {
+            document.getElementById('multihop-turns-details').style.display = 'block';
+            turnsContainer.innerHTML = turns.map(t => {
+              const isOk = t.status === 'SUCCESS';
+              const badgeClass = isOk ? 'status-success' : 'status-failed';
+              const tokenBadge = t.tokenExchange ? `<span class="hop-tag tag-rfc8693">${t.tokenExchange.requiredScope || 'Token Exchange'}</span>` : '<span class="hop-tag tag-azure">In-Memory LLM</span>';
+              
+              let outputSnippet = '';
+              if (t.returnedToOrchestrator?.content?.[0]?.text) {
+                outputSnippet = `<div style="font-size: 11px; color: var(--text-muted); margin-top: 4px;"><strong>📥 Data Returned to Orchestrator:</strong> <pre style="font-size: 10px; color: #a5f3fc; max-height: 80px; overflow-y: auto; margin-top: 2px;">${t.returnedToOrchestrator.content[0].text.substring(0, 300)}...</pre></div>`;
+              } else if (t.graphDeliveryResult) {
+                const gr = t.graphDeliveryResult;
+                outputSnippet = `<div style="font-size: 11px; color: var(--text-muted); margin-top: 4px;"><strong>🌐 Direct Graph API Dispatch:</strong> <span style="color: var(--success); font-family: monospace;">HTTP ${gr.graphApiStatus} ${gr.graphApiStatusText} ➔ Delivered via ${gr.deliveryRelay?.provider || 'Relay'}</span></div>`;
+              } else if (t.error) {
+                outputSnippet = `<div style="font-size: 11px; color: var(--danger); margin-top: 4px;"><strong>❌ Block Reason:</strong> ${t.error.content?.[0]?.text || t.error.audit?.decision}</div>`;
+              }
+
+              return `
+                <div class="hop-card ${isOk ? 'success' : 'denied'}" style="margin-bottom: 8px; padding: 10px;">
+                  <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 6px;">
+                    <div style="font-weight: 700; font-size: 12px; display: flex; align-items: center; gap: 8px;">
+                      <span>Turn ${t.turn}: ${t.name}</span>
+                      ${tokenBadge}
+                    </div>
+                    <span class="status-badge ${badgeClass}" style="font-size: 10px;">${t.status}</span>
+                  </div>
+                  <div style="font-size: 11px; color: var(--text-muted); margin-bottom: 4px;">
+                    <strong style="color: var(--purple);">🧠 LLM Intent & Reason:</strong> <span style="color: var(--text);">${t.thought}</span>
+                  </div>
+                  <div style="font-size: 11px; color: var(--text-muted); margin-bottom: 4px;">
+                    <strong>🎯 Invoked Target:</strong> <span style="color: var(--primary); font-family: monospace;">${t.invokedTarget}</span>
+                  </div>
+                  ${outputSnippet}
+                  ${t.tokenExchange?.decoded ? `
+                    <details style="margin-top: 6px;">
+                      <summary style="cursor: pointer; font-size: 10px; color: var(--primary); font-weight: 600;">📜 View Token Claims for this Hop (aud: ${t.tokenExchange.targetAudience})</summary>
+                      <pre style="font-size: 10px; margin-top: 4px; max-height: 120px; overflow-y: auto;">${JSON.stringify(t.tokenExchange.decoded, null, 2)}</pre>
+                    </details>
+                  ` : ''}
+                </div>
+              `;
+            }).join('');
+          } else {
+            const td = document.getElementById('multihop-turns-details');
+            if (td) td.style.display = 'none';
+          }
+        } else {
+          mhTracker.style.display = 'none';
+        }
+
+        // Hop 1: Human User
+        const h1 = hop.hop1_userToken || {};
+        document.getElementById('hop1-sub').textContent = h1.sub || data.user?.sub || 'N/A';
+        document.getElementById('hop1-email').textContent = h1.email || data.user?.email || 'N/A';
+        document.getElementById('hop1-roles').textContent = (h1.roles || data.user?.roles || []).join(', ');
+        document.getElementById('hop1-scopes').textContent = h1.scope || (currentUser?.scopes || []).join(', ');
+        document.getElementById('hop1-iss').textContent = h1.issuer || 'https://keycloak.internal/realms/azure-wif-realm';
+        document.getElementById('hop1-decoded').textContent = JSON.stringify(h1.decodedToken || { sub: h1.sub, email: h1.email, roles: h1.roles }, null, 2);
+        document.getElementById('hop1-raw').textContent = h1.rawToken || currentToken || 'N/A';
+
+        // Hop 2: Agent Identity
+        const h2 = hop.hop2_agentIdentity || {};
+        document.getElementById('hop2-spiffeid').textContent = h2.spiffeId || data.agent?.spiffeId || 'spiffe://example.org/ns/agent-system/sa/orchestrator-sa';
+        document.getElementById('hop2-audience').textContent = h2.audience || 'api://AzureADTokenExchange';
+        document.getElementById('hop2-method').textContent = h2.cryptographicAssertion || 'mTLS + SPIFFE SVID signed by SPIRE';
+        document.getElementById('hop2-plan').textContent = data.plan 
+          ? `Tool: ${data.plan.plannedTool} | Container: ${data.plan.arguments?.container} | Action: ${data.plan.arguments?.action}` 
+          : 'N/A';
+        document.getElementById('hop2-decoded').textContent = JSON.stringify(h2.decodedToken || {
+          sub: h2.spiffeId,
+          aud: h2.audience,
+          assertion: h2.cryptographicAssertion
+        }, null, 2);
+        document.getElementById('hop2-raw').textContent = h2.rawToken || 'N/A';
+
+        // Hop 3: RFC 8693 Delegated Token
+        const h3 = hop.hop3_rfc8693Token || {};
+        const cardHop3 = document.getElementById('card-hop3');
+        const hop3Status = document.getElementById('hop3-status');
+        const hop3ActBox = document.getElementById('hop3-act-box');
+
+        if (h3.status === 'BLOCKED_BY_ORCHESTRATOR_FGP') {
+          cardHop3.className = 'hop-card denied';
+          hop3Status.className = 'status-badge status-failed';
+          hop3Status.textContent = 'BLOCKED BY POLICY';
+          document.getElementById('hop3-sub').textContent = 'N/A';
+          document.getElementById('hop3-aud').textContent = 'N/A';
+          document.getElementById('hop3-scope').textContent = 'N/A';
+          document.getElementById('hop3-ttl').textContent = 'N/A';
+          document.getElementById('hop3-act').textContent = `Policy block: ${h3.reason}`;
+          document.getElementById('hop3-decoded').textContent = JSON.stringify({ error: 'Token exchange halted by Orchestrator FGP', reason: h3.reason }, null, 2);
+          document.getElementById('hop3-raw').textContent = 'N/A (Token not minted)';
+        } else {
+          const isTampered = isRogue || h3.signatureStatus === 'UNTRUSTED_ACTOR_REJECTED';
+          cardHop3.className = 'hop-card ' + (isTampered ? 'denied' : 'success');
+          hop3Status.className = 'status-badge ' + (isTampered ? 'status-failed' : 'status-success');
+          hop3Status.textContent = isTampered ? 'UNTRUSTED ACTOR' : 'RFC 8693 VALIDATED';
+
+          document.getElementById('hop3-sub').textContent = h3.sub || 'N/A';
+          document.getElementById('hop3-aud').textContent = h3.aud || 'N/A';
+          document.getElementById('hop3-scope').textContent = Array.isArray(h3.scope) ? h3.scope.join(' ') : (h3.scope || 'mcp:tool1');
+          document.getElementById('hop3-ttl').textContent = (h3.ttlSeconds || 300) + 's (Short-Lived Downscoped)';
+          
+          hop3ActBox.className = 'claim-act-box ' + (isTampered ? 'tampered' : '');
+          document.getElementById('hop3-act').textContent = JSON.stringify(h3.act || {
+            sub: 'spiffe://example.org/ns/agent-system/sa/orchestrator-sa',
+            iss: 'https://spire.agent-system.svc.cluster.local',
+            client_id: 'orchestrator-workload-identity'
+          }, null, 2);
+
+          document.getElementById('hop3-decoded').textContent = JSON.stringify(h3.decodedToken || h3.fullTokenClaims || {}, null, 2);
+          document.getElementById('hop3-raw').textContent = h3.rawToken || 'N/A';
+        }
+
+        // Hop 4: JIT Storage Delegation
+        const h4 = hop.hop4_storageDelegation || {};
+        const cardHop4 = document.getElementById('card-hop4');
+        const hop4Status = document.getElementById('hop4-status');
+
+        if (h4.status === 'NOT_EVALUATED') {
+          cardHop4.className = 'hop-card warning';
+          hop4Status.className = 'status-badge status-neutral';
+          hop4Status.textContent = 'NOT MINTED';
+          document.getElementById('hop4-cred-type').textContent = 'N/A (Stopped at Hop 3)';
+          document.getElementById('hop4-ttl').textContent = 'N/A';
+          document.getElementById('hop4-resource').textContent = 'N/A';
+          document.getElementById('hop4-account').textContent = 'N/A';
+          document.getElementById('hop4-binding').textContent = 'N/A';
+          document.getElementById('hop4-decision').textContent = 'Not evaluated due to upstream policy denial';
+          document.getElementById('hop4-decoded').textContent = JSON.stringify({ error: 'Storage credential not minted due to upstream policy denial' }, null, 2);
+          document.getElementById('hop4-raw').textContent = 'N/A';
+        } else {
+          const decision = h4.cloudIamStatus || '';
+          const isAllowed = !isError && decision.includes('ALLOWED');
+          cardHop4.className = 'hop-card ' + (isAllowed ? 'success' : 'denied');
+          hop4Status.className = 'status-badge ' + (isAllowed ? 'status-success' : 'status-failed');
+          hop4Status.textContent = isAllowed ? 'STORAGE ALLOWED' : (data.mcpResponse?.cloudIAMDecision || 'DENIED');
+
+          document.getElementById('hop4-cred-type').textContent = h4.credentialType || 'OAuth 2.0 User-Delegation SAS (60s)';
+          document.getElementById('hop4-ttl').textContent = (h4.ttlSeconds || 60) + 's (Ephemeral JIT)';
+          document.getElementById('hop4-resource').textContent = h4.resource || (data.plan?.arguments ? `/${data.plan.arguments.container}/${data.plan.arguments.filename}` : 'N/A');
+          document.getElementById('hop4-account').textContent = h4.storageAccount || 'azwifstoragepocrt';
+          document.getElementById('hop4-binding').textContent = h4.chainBinding || 'SHA-256 bound to Hop 3 token';
+          document.getElementById('hop4-decision').innerHTML = isAllowed
+            ? '<span style="color: var(--success); font-weight: 600;">ALLOWED (HTTP 200 OK via Azure Storage Native RBAC)</span>'
+            : `<span style="color: var(--danger); font-weight: 600;">${decision}</span>`;
+
+          document.getElementById('hop4-decoded').textContent = JSON.stringify(h4.decodedToken || {}, null, 2);
+          document.getElementById('hop4-raw').textContent = h4.rawToken || 'N/A';
+        }
+
+        // Hop 5: RFC 8693 Delegated Token for Microsoft Graph
+        const h5 = hop.hop5_graphToken;
+        const cardHop5 = document.getElementById('card-hop5');
+        const hop5Status = document.getElementById('hop5-status');
+        const hop5ActBox = document.getElementById('hop5-act-box');
+
+        // Hop 6: Direct Microsoft Graph API Execution
+        const h6 = hop.hop6_graphExecution;
+        const cardHop6 = document.getElementById('card-hop6');
+        const hop6Status = document.getElementById('hop6-status');
+
+        if (h5 && (h5.rawToken || h5.sub || h5.decodedToken || data.multiHopExecution)) {
+          cardHop5.style.display = 'block';
+          const isH5Denied = h5.status === 'DENIED_BY_POLICY' || (data.multiHopExecution?.steps?.[3]?.status === 'DENIED_BY_POLICY');
+          const isH5NotMinted = h5.status === 'NOT_MINTED' || h5.status === 'NOT_EVALUATED_HALTED_EARLIER';
+          
+          if (isH5NotMinted) {
+            cardHop5.className = 'hop-card warning';
+            hop5Status.className = 'status-badge status-neutral';
+            hop5Status.textContent = 'NOT MINTED';
+            document.getElementById('hop5-sub').textContent = 'N/A';
+            document.getElementById('hop5-aud').textContent = 'https://graph.microsoft.com';
+            document.getElementById('hop5-scope').textContent = 'Mail.Send (Halted)';
+            document.getElementById('hop5-ttl').textContent = 'N/A';
+            document.getElementById('hop5-act').textContent = 'Pipeline halted before Graph token exchange.';
+            document.getElementById('hop5-decoded').textContent = JSON.stringify({ error: 'Token not minted' }, null, 2);
+            document.getElementById('hop5-raw').textContent = 'N/A';
+          } else {
+            cardHop5.className = 'hop-card ' + (isH5Denied ? 'denied' : 'success');
+            hop5Status.className = 'status-badge ' + (isH5Denied ? 'status-failed' : 'status-success');
+            hop5Status.textContent = isH5Denied ? 'MAIL.SEND DENIED' : 'GRAPH OBO VALIDATED';
+
+            document.getElementById('hop5-sub').textContent = h5.sub || data.user?.sub || 'N/A';
+            document.getElementById('hop5-aud').textContent = h5.aud || 'https://graph.microsoft.com';
+            document.getElementById('hop5-scope').textContent = Array.isArray(h5.scope) ? h5.scope.join(' ') : (h5.scope || 'Mail.Send');
+            document.getElementById('hop5-ttl').textContent = (h5.ttlSeconds || 300) + 's (Short-Lived Downscoped)';
+            document.getElementById('hop5-act').textContent = JSON.stringify(h5.act || {
+              sub: 'spiffe://example.org/ns/agent-system/sa/orchestrator-sa',
+              iss: 'https://spire.agent-system.svc.cluster.local',
+              client_id: 'orchestrator-workload-identity'
+            }, null, 2);
+
+            document.getElementById('hop5-decoded').textContent = JSON.stringify(h5.decodedToken || h5.fullTokenClaims || {}, null, 2);
+            document.getElementById('hop5-raw').textContent = h5.rawToken || 'N/A';
+          }
+        } else {
+          cardHop5.style.display = 'none';
+        }
+
+        if (h6 || (data.multiHopExecution && data.multiHopExecution.executedSteps >= 4)) {
+          cardHop6.style.display = 'block';
+          const s4 = data.multiHopExecution?.steps?.[3];
+          const isH6Ok = s4?.status === 'SUCCESS' || h6?.graphStatus?.includes('200') || h6?.graphStatus?.includes('202');
+          
+          cardHop6.className = 'hop-card ' + (isH6Ok ? 'success' : 'denied');
+          hop6Status.className = 'status-badge ' + (isH6Ok ? 'status-success' : 'status-failed');
+          hop6Status.textContent = isH6Ok ? 'HTTP 202 ACCEPTED' : (s4?.status || 'DENIED');
+
+          document.getElementById('hop6-recipient').textContent = h6?.recipient || s4?.recipient || 'rtarway@gmail.com';
+          document.getElementById('hop6-decision').innerHTML = isH6Ok
+            ? '<span style="color: var(--success); font-weight: 600;">ALLOWED (HTTP 202 Accepted via Microsoft Graph API)</span>'
+            : `<span style="color: var(--danger); font-weight: 600;">${s4?.mcpResponse?.content?.[0]?.text || s4?.status || 'DENIED_BY_POLICY'}</span>`;
+
+          const relay = h6?.deliveryRelay || (function() {
+            try { return JSON.parse(s4?.mcpResponse?.content?.[0]?.text)?.data?.deliveryRelay; } catch { return null; }
+          })();
+
+          let relayText = 'Zero Email Dispatched (Blocked)';
+          if (isH6Ok) {
+            if (relay?.delivered) relayText = `✅ Delivered via ${relay.provider} (ID: ${relay.messageId || 'OK'})`;
+            else if (relay?.provider === 'unconfigured') relayText = '⚠️ Graph validated (Set API Key to deliver)';
+            else if (relay?.error) relayText = `⚠️ ${relay.provider || 'Relay'}: ${relay.error}`;
+            else relayText = '✅ Direct Graph API Accepted';
+          }
+          document.getElementById('hop6-relay').innerHTML = `<span style="color: ${isH6Ok ? 'var(--success)' : 'var(--danger)'}; font-weight: 600;">${relayText}</span>`;
+
+          document.getElementById('hop6-decoded').textContent = JSON.stringify(h6?.decodedToken || s4?.mcpResponse || {}, null, 2);
+          document.getElementById('hop6-raw').textContent = h6?.rawToken || (s4?.token ? `Bearer ${s4.token}` : 'N/A');
+        } else {
+          cardHop6.style.display = 'none';
+        }
+
+        // Trace MCP Raw Output
+        document.getElementById('trace-mcp').textContent = JSON.stringify(data.mcpResponse, null, 2);
+
+        // Global status indicator
+        document.getElementById('status-indicator').innerHTML = isError
+          ? `<span class="status-badge status-failed">${data.mcpResponse?.cloudIAMDecision || 'Execution Denied'}</span>`
+          : '<span class="status-badge status-success">Completed (HTTP 200)</span>';
+
+      } catch (err) {
+        document.getElementById('status-indicator').innerHTML = `<span class="status-badge status-failed">Error: ${err.message}</span>`;
+      }
+    }
+  </script>
+</body>
+</html>

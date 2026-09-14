@@ -1,0 +1,71 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: mcp-gcp-server
+  namespace: agent-system
+  labels:
+    app: mcp-gcp-server
+    cloud: gcp
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: mcp-gcp-server
+  template:
+    metadata:
+      labels:
+        app: mcp-gcp-server
+        cloud: gcp
+      annotations:
+        "sidecar.istio.io/inject": "true"
+    spec:
+      containers:
+        - name: mcp-gcp-server
+          image: gcp-mcp-server:v1.0.0
+          imagePullPolicy: IfNotPresent
+          ports:
+            - containerPort: 8081
+              name: http
+          env:
+            - name: PORT
+              value: "8081"
+            - name: MCP_PROTOCOL_VERSION
+              value: "2026-07-15"
+            - name: GCP_PROJECT_ID
+              value: "wifdemoproject-507002"
+
+            - name: GCP_DATASET_ANALYTICS
+              value: "analytics_data"
+            - name: GCP_DATASET_AUDIT
+              value: "audit_logs"
+            - name: JWT_SECRET
+              value: "demo-obo-token-secret-key-2026"
+          resources:
+            requests:
+              cpu: 100m
+              memory: 128Mi
+            limits:
+              cpu: 500m
+              memory: 256Mi
+          readinessProbe:
+            httpGet:
+              path: /healthz
+              port: 8081
+            initialDelaySeconds: 5
+            periodSeconds: 10
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: gcp-mcp-service
+  namespace: agent-system
+  labels:
+    app: mcp-gcp-server
+spec:
+  type: ClusterIP
+  selector:
+    app: mcp-gcp-server
+  ports:
+    - name: http
+      port: 8081
+      targetPort: 8081
