@@ -126,12 +126,42 @@ app.post('/api/login', async (req, res) => {
     { expiresInSeconds: 3600 }
   );
 
+  // 3. Mint Google Cloud IAM / Google STS Subject Token (RS256 PKI)
+  const googlePrivateKey = jwtUtil.getGoogleStsPrivateKey();
+  const gcpProjectNumber = process.env.GCP_PROJECT_NUMBER || '834200279688';
+  const gcpPoolId = process.env.GCP_POOL_ID || 'k8s-agent-pool';
+  const gcpProviderId = process.env.GCP_PROVIDER_ID || 'spire-oidc-provider';
+  const gcpAudience = `//iam.googleapis.com/projects/${gcpProjectNumber}/locations/global/workloadIdentityPools/${gcpPoolId}/providers/${gcpProviderId}`;
+
+  const gcpPayload = {
+    iss: 'https://sts.googleapis.com',
+    aud: gcpAudience,
+    sub: user.email,
+    email: user.email,
+    email_verified: true,
+    name: user.displayName,
+    roles: user.roles,
+    scope: user.scopes.filter(s => s.startsWith('mcp:bigquery:')).join(' ') || 'mcp:bigquery:query',
+    identityProvider: 'GoogleCloudIAM_STS',
+    google_cloud_iam: {
+      projectId: process.env.GCP_PROJECT_ID || 'wifdemoproject-507002',
+      projectNumber: gcpProjectNumber,
+      poolId: gcpPoolId,
+      federationType: 'WorkloadIdentityFederation'
+    }
+  };
+
+  const googleIamToken = googlePrivateKey
+    ? jwtUtil.signRS256(gcpPayload, googlePrivateKey, { expiresInSeconds: 3600 })
+    : jwtUtil.sign(gcpPayload, JWT_SECRET, { expiresInSeconds: 3600 });
+
   return res.json({
     authenticated: true,
     user,
     token: keycloakToken, // Primary token used by orchestrator
     keycloakToken,
-    entraToken
+    entraToken,
+    googleIamToken
   });
 });
 

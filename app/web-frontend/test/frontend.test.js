@@ -133,6 +133,11 @@ describe('Web Frontend Tests (Outside SPIRE)', () => {
     assert.ok(res.body.user.scopes.includes('Mail.Send'));
     assert.ok(res.body.keycloakToken);
     assert.ok(res.body.entraToken);
+    assert.ok(res.body.googleIamToken);
+
+    const googleDecoded = jwtUtil.decode(res.body.googleIamToken);
+    assert.strictEqual(googleDecoded.sub, 'alice@rtarwaygmail.onmicrosoft.com');
+    assert.strictEqual(googleDecoded.iss, 'https://sts.googleapis.com');
   });
 
   test('POST /api/login for Charlie issues token without Mail.Send scope', async () => {
