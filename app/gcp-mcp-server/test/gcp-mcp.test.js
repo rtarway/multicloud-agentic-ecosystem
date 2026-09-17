@@ -3,6 +3,10 @@ const assert = require('node:assert/strict');
 const app = require('../src/index');
 const jwtUtil = require('../src/jwtUtil');
 
+const fs = require('fs');
+const path = require('path');
+
+const googleStsPrivateKey = fs.readFileSync(path.resolve(__dirname, '../../../certs/google-sts-key.pem'), 'utf8');
 const JWT_SECRET = process.env.JWT_SECRET || 'demo-obo-token-secret-key-2026';
 
 function mockRequest(method, url, headers = {}, body = {}) {
@@ -53,7 +57,7 @@ function mockRequest(method, url, headers = {}, body = {}) {
 
 function mintToken(claims = {}) {
   const payload = {
-    iss: 'https://accounts.google.com',
+    iss: 'https://sts.googleapis.com',
     sub: 'bob@example.com',
     aud: 'gcp-bigquery-mcp-server',
     scope: 'mcp:bigquery:query',
@@ -71,7 +75,7 @@ function mintToken(claims = {}) {
     delegationType: 'RFC8693_MULTI_HOP',
     ...claims
   };
-  return jwtUtil.sign(payload, JWT_SECRET, { expiresInSeconds: 300 });
+  return jwtUtil.signRS256(payload, googleStsPrivateKey, { expiresInSeconds: 300 });
 }
 
 test('GCP BigQuery MCP Server Test Suite (Spec 2026-07-15 & RFC 8693 Multi-Hop)', async (t) => {
@@ -126,6 +130,28 @@ test('GCP BigQuery MCP Server Test Suite (Spec 2026-07-15 & RFC 8693 Multi-Hop)'
 
     assert.equal(res.body.result.isError, true);
     assert.ok(res.body.result.content[0].text.includes('Authentication Failure'));
+  });
+  await t.test('POST /mcp tools/call rejects insecure symmetric HMAC tokens claiming to be Google IAM', async () => {
+    const fakeHmacToken = jwtUtil.sign({
+      iss: 'https://sts.googleapis.com',
+      sub: 'bob@example.com',
+      aud: 'gcp-bigquery-mcp-server'
+    }, JWT_SECRET, { expiresInSeconds: 300 });
+
+    const res = await mockRequest('POST', '/mcp', {
+      authorization: `Bearer ${fakeHmacToken}`
+    }, {
+      jsonrpc: '2.0',
+      id: 'call-hmac-blocked',
+      method: 'tools/call',
+      params: {
+        name: 'bigquery_query_sales',
+        arguments: { quarter: 'Q2-2026', region: 'north-america', metric: 'revenue_breakdown' }
+      }
+    });
+
+    assert.equal(res.body.result.isError, true);
+    assert.ok(res.body.result.content[0].text.includes('Insecure symmetric HMAC') || res.body.result.content[0].text.includes('RS256 PKI is required'));
   });
 
   await t.test('POST /mcp tools/call rejects tokens issued by Keycloak (enforces Google Cloud IAM protection)', async () => {

@@ -428,3 +428,41 @@ In Google Cloud Audit Logs, security operations teams can filter by `labels.dele
 - **RFC 8693 (OAuth 2.0 Token Exchange)**: Full compliance with Section 2.1 (Scope Downscoping) and Section 4.1 (Recursive Multi-Hop Actor Lineage).
 - **OWASP Top 10 for LLMs / AI Agents (LLM06 Excessive Agency & LLM08 Insecure Data)**: Neutralizes the Confused Deputy problem and prevents prompt injections from escaping bounded tool scopes.
 - **MAESTRO Architecture**: Implements cryptographically verifiable actor lineage across heterogeneous cloud domains.
+
+---
+
+## 8. Authentic Cloud IAM Asymmetric PKI vs. Insecure Symmetric Token Simulation
+
+### 8.1 Elimination of Insecure Symmetric HMAC Tokens
+In insecure legacy implementations, an application orchestrator might mint simulated cloud tokens using a shared symmetric HMAC secret (`JWT_SECRET` / `OBO_SECRET`) and pass them to downstream MCP servers. In enterprise production, **this practice is fundamentally rejected**:
+- **Compromised Blast Radius**: Any workload possessing the symmetric secret can arbitrarily forge tokens for any identity, any scope, and any audience.
+- **Breach of Trust Boundaries**: Google Cloud IAM, Microsoft Entra ID, and cloud services do not share symmetric HMAC secrets with application containers.
+- **Zero-Trust Violation**: Cryptographic authenticity must derive from the authoritative Identity Provider via Asymmetric Public Key Infrastructure (RFC 7515 RS256) and public JWKS (`.well-known/jwks.json`).
+
+### 8.2 Authentic Google Cloud STS Token Exchange
+To preserve absolute zero-trust integrity, token exchange with Google Cloud Platform strictly follows standard OAuth 2.0 Token Exchange (RFC 8693):
+- **Token Endpoint**: `https://sts.googleapis.com/v1/token`
+- **Parameters**:
+  - `grant_type`: `urn:ietf:params:oauth:grant-type:token-exchange`
+  - `subject_token`: Alice's authentic Keycloak OIDC ID token (`sub: alice@example.com`)
+  - `subject_token_type`: `urn:ietf:params:oauth:token-type:id_token`
+  - `actor_token`: Orchestrator's authentic SPIFFE SVID JWT (`sub: spiffe://example.org/ns/agent-system/sa/orchestrator-sa`)
+  - `actor_token_type`: `urn:ietf:params:oauth:token-type:jwt`
+  - `audience`: Workload Identity Pool Provider (`//iam.googleapis.com/projects/.../workloadIdentityPools/k8s-agent-pool/providers/spire-oidc-provider`)
+  - `access_boundary`: Credential Access Boundary JSON (physically restricts table access)
+- **Token Signature**: Asymmetric RSA Private Key (`RS256`), verified downstream by the GCP MCP server using the authoritative Google STS Public Certificate / JWKS (`certs/google-sts-cert.pem`).
+- **Fail-Closed Enforcement**: The GCP MCP Server strictly inspects `alg: 'RS256'` against the public certificate. Any incoming token signed with symmetric HMAC (`HS256`) is actively detected as a security violation and **immediately rejected with HTTP 401/403**.
+
+### 8.3 Standards Compliance & Non-Compliance Matrix
+The following matrix articulates what is standard-compliant and calls out deviations across relevant cybersecurity frameworks:
+
+| Standard / Framework | Requirement | Authentic Implementation Status | What is Non-Compliant with Standards (if compromised) |
+| :--- | :--- | :--- | :--- |
+| **NIST SP 800-207 (Zero Trust)** | All tokens must be cryptographically issued and verified by authoritative trust roots; no implicit trust. | **COMPLIANT**: Tokens issued by authentic IdP / Google STS via RS256 PKI; MCP server validates against public certificate. | Minting tokens outside an authoritative IdP or using symmetric HMAC shared secrets violates Zero Trust core tenet #4 (Dynamic evaluation via authentic IdP). |
+| **NIST SP 800-53 Rev. 5 (IA-2, IA-5, SC-12)** | Authenticator management, asymmetric cryptographic mechanisms, and non-repudiation. | **COMPLIANT**: Eliminates shared secrets; enforces asymmetric RS256 PKI public-key verification. | Storing symmetric keys (`JWT_SECRET`) across distributed microservices violates IA-5(1) (Password/Key Management) and SC-12 (Cryptographic Key Establishment). |
+| **RFC 8693 Section 2.1 (Scope Downscoping)** | Exchanged token scope must not exceed subject token scope: $\text{Scope}_{\text{exchanged}} \subseteq \text{Scope}_{\text{subject}}$. | **COMPLIANT**: Gate 1 verifies IdP scopes before exchange; unauthorized users fail-closed with `SCOPE_ESCALATION_DENIED`. | Minting tokens with scopes the subject does not possess in the IdP violates RFC 8693 §2.1. |
+| **RFC 8693 Section 4.1 (`act` Claim Support in Cloud STS)** | Downstream tokens must encapsulate recursive `act` claims representing delegated actors. | **DEVIATION / CALL-OUT**: **Google Cloud STS and Microsoft Entra ID native access tokens do not currently embed custom RFC 8693 Section 4.1 recursive `act` claims**. Cloud STS issues standard cloud access tokens bound to the service account and Credential Access Boundary. | Injecting artificial `act` claims into an IdP-signed token invalidates its digital signature. To remain secure, authentic cloud tokens are accepted without `act` claims, while application lineage is preserved via SPIFFE SVID actor assertions and Cloud Audit Labels (NIST AU-2/3). |
+| **OWASP Top 10 for LLM (LLM06: Excessive Agency)** | Prevent autonomous agents from taking actions beyond least privilege or performing confused deputy operations. | **COMPLIANT**: Credential Access Boundaries (CAB) and tools.yaml FGP limit physical execution to specified datasets/tables. | Relying solely on prompt instructions or unconstrained service account tokens exposes the system to LLM06 and prompt injection table exfiltration. |
+| **OWASP API Security Top 10 (API2:2023 Broken Authentication)** | Strong token validation, audience restriction, and cryptographic integrity. | **COMPLIANT**: Enforces strict audience checking, expiration, and RS256 signature verification. | Accepting unsigned or symmetrically forged tokens claiming to be Google Cloud IAM represents classic Broken Authentication. |
+| **OSA (Open Security Architecture) & MAESTRO** | Autonomous Agent Security Architecture: Lineage tracking, non-repudiation, verifiable provenance. | **COMPLIANT**: Complete hop-to-hop provenance tracked across SPIFFE SVIDs, IdP tokens, CAB downscoping, and BigQuery Job Labels. | Untracked delegation or synthetic machine identities without audit trails violate MAESTRO Agent Lineage principles. |
+

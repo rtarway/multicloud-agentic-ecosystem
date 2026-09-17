@@ -270,35 +270,41 @@ class TokenExchangeEngine {
         }
       };
 
+      let liveStsToken = null;
       try {
         console.log(`\n=============================================================`);
         console.log(`[ORCH-GCP-STS] 🌐 Calling Google Cloud STS Token Endpoint (RFC 8693 + CAB):`);
-        console.log(`[ORCH-GCP-STS]   Audience:  ${GCP_STS_AUDIENCE}`);
-        console.log(`[ORCH-GCP-STS]   Principal: ${userEmail}`);
-        console.log(`[ORCH-GCP-STS]   Lineage:   [${actorChain.join(' -> ')}]`);
-        console.log(`[ORCH-GCP-STS]   CAB Scope: ${credentialAccessBoundary.accessBoundary.accessBoundaryRules[0].availableResource}`);
+        console.log(`[ORCH-GCP-STS]   Audience:      ${GCP_STS_AUDIENCE}`);
+        console.log(`[ORCH-GCP-STS]   Subject Token: [Keycloak IdP ID Token for ${userEmail}]`);
+        console.log(`[ORCH-GCP-STS]   Actor Token:   ${agentSpiffeId} (SPIFFE SVID)`);
+        console.log(`[ORCH-GCP-STS]   Lineage:       [${actorChain.join(' -> ')}]`);
+        console.log(`[ORCH-GCP-STS]   CAB Scope:     ${credentialAccessBoundary.accessBoundary.accessBoundaryRules[0].availableResource}`);
 
         const stsResponse = await this._callGoogleStsTokenExchange({
           grant_type: 'urn:ietf:params:oauth:grant-type:token-exchange',
           audience: GCP_STS_AUDIENCE,
           scope: 'https://www.googleapis.com/auth/cloud-platform',
           requested_token_type: 'urn:ietf:params:oauth:token-type:access_token',
-          subject_token_type: 'urn:ietf:params:oauth:token-type:jwt',
+          subject_token_type: 'urn:ietf:params:oauth:token-type:id_token',
           subject_token: userToken || 'mock-user-token',
+          actor_token_type: 'urn:ietf:params:oauth:token-type:jwt',
+          actor_token: agentSvid || agentSpiffeId,
           access_boundary: JSON.stringify(credentialAccessBoundary)
         });
 
         console.log(`[ORCH-GCP-STS] 📡 Google STS Response: HTTP ${stsResponse.statusCode}`);
-        if (stsResponse.statusCode === 200 && stsResponse.body.access_token) {
-          console.log(`[ORCH-GCP-STS]   ✅ CAB-Downscoped Access Token minted by Google Cloud STS!`);
+        if (stsResponse.statusCode === 200 && (stsResponse.body.access_token || stsResponse.body.id_token)) {
+          console.log(`[ORCH-GCP-STS]   ✅ CAB-Downscoped Token minted by Google Cloud STS!`);
+          liveStsToken = stsResponse.body.access_token || stsResponse.body.id_token;
         }
       } catch (err) {
         console.log(`[ORCH-GCP-STS] ℹ️ Google Cloud STS live call note: ${err.message}`);
       }
 
-      // Construct High-Fidelity Google Cloud IAM / RFC 8693 OBO Token with CAB
+      // Construct High-Fidelity Google Cloud IAM / Google STS Asymmetric Token
+      // Signed with Google STS Private Key (RS256 PKI), verified by GCP MCP Server with Google STS Public Cert
       const gcpClaims = {
-        iss: 'https://accounts.google.com',
+        iss: 'https://sts.googleapis.com',
         aud: targetAudience || GCP_MCP_AUDIENCE,
         azp: GCP_SERVICE_ACCOUNT,
         sub: userEmail,
@@ -321,7 +327,10 @@ class TokenExchangeEngine {
         delegationType: 'RFC8693_MULTI_HOP_CHAIN'
       };
 
-      const exchangedToken = jwtUtil.sign(gcpClaims, OBO_SECRET, { expiresInSeconds: 300 });
+      const googleStsPrivateKey = jwtUtil.getGoogleStsPrivateKey();
+      const exchangedToken = liveStsToken || (googleStsPrivateKey
+        ? jwtUtil.signRS256(gcpClaims, googleStsPrivateKey, { expiresInSeconds: 300 })
+        : jwtUtil.sign(gcpClaims, OBO_SECRET, { expiresInSeconds: 300 }));
 
       return {
         exchangedToken,

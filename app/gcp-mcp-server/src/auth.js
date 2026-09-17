@@ -49,11 +49,38 @@ function verifyGcpOboToken(authHeader, delegatedHeader) {
 
   try {
     let decoded;
+    let verificationMethod = 'NONE';
+    // Strictly verify token using Google STS / Cloud IAM Asymmetric Public Key (RS256 PKI)
     try {
-      decoded = jwtUtil.verify(token, JWT_SECRET);
-    } catch {
-      // Decode for inspecting claims if signed by Google STS or Entra ID
-      decoded = jwtUtil.decode(token);
+      decoded = jwtUtil.verifyGoogleIamToken(token);
+      verificationMethod = 'GOOGLE_STS_RS256_PKI';
+    } catch (rs256Err) {
+      // If RS256 fails, check if the token attempts symmetric HMAC forgery
+      try {
+        const hmacDecoded = jwtUtil.verify(token, JWT_SECRET);
+        if (hmacDecoded) {
+          console.warn(`[GCP-MCP-AUTH] 🚨 REJECTED: Insecure symmetric HMAC token detected claiming to be Google Cloud IAM! RFC 7515 RS256 PKI is required.`);
+          return {
+            authenticated: false,
+            error: 'Security Policy Violation: Insecure symmetric HMAC signature rejected. GCP MCP Server requires authentic Google Cloud IAM RS256 PKI.'
+          };
+        }
+      } catch {
+        // Not valid HMAC either
+      }
+
+      // Check if it can be decoded at all
+      const peek = jwtUtil.decode(token);
+      if (!peek) {
+        return {
+          authenticated: false,
+          error: `Token verification failed: Invalid JWT format or unverified signature (${rs256Err.message}).`
+        };
+      }
+      return {
+        authenticated: false,
+        error: `Cryptographic signature verification failed: ${rs256Err.message}`
+      };
     }
 
     if (!decoded) {

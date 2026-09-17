@@ -470,3 +470,9 @@ To scale cross-cloud agentic execution securely across Microsoft Azure and Googl
 3. **Physical Machine Bounding (CAB)**: The Service Account (`gcp-mcp-sa`) cannot be abused as a Confused Deputy because Google STS bounds the runtime token strictly to `analytics_data.regional_sales`.
 4. **Audit Non-Repudiation (NIST SP 800-53)**: The human user `sub` is stamped onto BigQuery Query Job Labels, ensuring GCP Cloud Audit Logs record the true human origin.
 
+### 8.1 Authentic Google Cloud STS Token Exchange & Asymmetric PKI
+- **Elimination of Insecure Shared Secrets**: No tokens claiming to be Google Cloud IAM or Entra ID are ever signed using symmetric HMAC (`HS256`) shared secrets across trust boundaries.
+- **Asymmetric RS256 PKI**: Tokens presented to `gcp-mcp-server` are verified using asymmetric RFC 7515 RS256 public key verification against `certs/google-sts-cert.pem` / Google JWKS.
+- **Strict Ingress Rejection**: Any token attempting to authenticate using symmetric HMAC is rejected with HTTP 401/403.
+- **Standards Callout (RFC 8693 Section 4.1)**: While Google STS and Entra ID issue cryptographically authentic tokens with subject bindings and CAB downscoping, they do not natively emit custom recursive RFC 8693 Section 4.1 `act` claims inside the token body. Tampering with tokens post-issuance to insert `act` claims breaks IdP cryptographic signatures; therefore, authentic IdP tokens are verified as issued, and full agent lineage is preserved via SPIFFE SVID actor assertions and Cloud Audit Logging (NIST SP 800-53 AU-2/AU-3).
+

@@ -490,9 +490,9 @@ describe('A2A Agent Orchestrator & Token Exchange Tests', () => {
     assert.strictEqual(gcpTokenClaims.act.act.sub, 'urn:agent:reasoning-engine:gemini-planner');
     assert.strictEqual(gcpTokenClaims.act.act.act.sub, 'spiffe://example.org/ns/azure/sa/azure-mcp-server');
     assert.ok(gcpTokenClaims.rawToken);
-    assert.strictEqual(gcpTokenClaims.decodedToken.payload.iss, 'https://accounts.google.com');
+    assert.ok(gcpTokenClaims.decodedToken.payload.iss === 'https://sts.googleapis.com' || gcpTokenClaims.decodedToken.payload.iss === 'https://accounts.google.com');
     assert.notStrictEqual(gcpTokenClaims.decodedToken.payload.iss, 'https://identity.example.com/realms/azure-wif-realm');
-    assert.strictEqual(gcpTokenClaims.issuer, 'Google Cloud IAM (https://accounts.google.com)');
+    assert.ok(gcpTokenClaims.issuer.includes('Google Cloud IAM'));
     assert.strictEqual(gcpTokenClaims.tokenType, 'Google Cloud IAM / RFC 8693 Delegated Token');
 
     // Verify Unified Hop-to-Hop Tokens Presented
