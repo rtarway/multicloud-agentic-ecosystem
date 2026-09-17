@@ -222,13 +222,13 @@
 
           <div style="background: var(--card-sub-bg); border-left: 4px solid #ea4335; border-radius: 6px; padding: 14px;">
             <div style="font-weight: 700; font-size: 13px; color: #f87171; margin-bottom: 4px;">
-              5. Why Alice, Bob & Charlie Don't Appear on Google Cloud IAM Console Screen
+              5. Google Cloud Workforce Identity Federation: Alice & Bob in Google Cloud IAM
             </div>
             <div style="font-size: 12px; color: var(--text-muted); line-height: 1.5;">
-              • <b>Zero IAM Credential Sprawl (NIST SP 800-53 AC-6)</b>: In Google Cloud, human end-users and analysts are <b>never given direct IAM user logins</b> (e.g. <code>alice@wifdemoproject-507002.iam.gserviceaccount.com</code>) to the Google Cloud Console.<br/>
-              • <b>Workload Identity Pool Federation</b>: Instead, the project provisions a <b>Workload Identity Pool</b> (<code>k8s-agent-pool</code>) and OIDC Provider (<code>spire-oidc-provider</code>). Google STS accepts tokens where the user is an external federated subject.<br/>
-              • <b>Physical Least Privilege via Credential Access Boundaries (CAB)</b>: When Google STS exchanges the federated token, it applies a machine-level Credential Access Boundary restricting access exclusively to <code>analytics_data.regional_sales</code>.<br/>
-              • <b>Audit Non-Repudiation in GCP</b>: When BigQuery runs, the GCP MCP Server stamps <code>labels.delegated_user = "alice@..."</code> onto the BigQuery Query Job. GCP Cloud Audit Logs record Alice as the human initiator without ever creating an individual Google account!
+              • <b>True Workforce Identity Federation (Workforce Pools)</b>: Alice and Bob are federated human users from corporate Keycloak into Google Cloud Workforce Identity Pool (<code>locations/global/workforcePools/enterprise-workforce-pool/providers/keycloak-workforce-provider</code>).<br/>
+              • <b>Direct IAM Resource Grants (Zero Workspace Sprawl)</b>: Instead of requiring Google Workspace/Cloud Identity logins, Alice and Bob appear directly as Google IAM member principals: <code>principal://iam.googleapis.com/locations/global/workforcePools/enterprise-workforce-pool/subject/{email}</code>.<br/>
+              • <b>BigQuery Dataset IAM Policies</b>: In Terraform, Alice has <code>roles/bigquery.dataViewer</code> on <code>analytics_data</code> and <code>roles/bigquery.admin</code> on <code>audit_logs</code>; Bob has <code>roles/bigquery.dataViewer</code> on <code>analytics_data</code>; Charlie has zero grants.<br/>
+              • <b>Physical Least Privilege via Credential Access Boundaries (CAB)</b>: When Google STS exchanges the federated token, it applies a downscoped CAB restricting access exclusively to <code>analytics_data.regional_sales</code>.
             </div>
           </div>
         </div>
@@ -457,11 +457,11 @@
                 <span style="background: #ea4335; color: white; padding: 2px 8px; border-radius: 4px; font-size: 10px; font-weight: 700;">GOOGLE STS</span>
               </div>
               <div style="font-size: 11px; color: var(--text-muted); margin-bottom: 6px;">
-                Issuer: <code id="google-iss" style="color: #cbd5e1;">https://sts.googleapis.com</code> &bull; Pool: <code style="color: #cbd5e1;">k8s-agent-pool</code>
+                Issuer: <code id="google-iss" style="color: #cbd5e1;">https://sts.googleapis.com</code> &bull; Pool: <code style="color: #cbd5e1;">enterprise-workforce-pool</code>
               </div>
               <details open style="margin-top: 6px;">
                 <summary style="cursor: pointer; font-size: 11px; font-weight: 600; color: #f87171;">
-                  📜 Decoded Google IAM / STS Claims (Workload Pool, Roles, Scopes)
+                  📜 Decoded Google IAM / STS Claims (Workforce Pool, Roles, Scopes)
                 </summary>
                 <pre id="google-decoded" style="color: #fca5a5; max-height: 140px; overflow-y: auto; margin-top: 4px;"></pre>
               </details>
@@ -474,9 +474,9 @@
             </div>
           </div>
 
-          <!-- Section 2: Multi-Cloud RBAC & Workload Identity Federation Matrix -->
+          <!-- Section 2: Multi-Cloud RBAC & Workforce Identity Federation Matrix -->
           <div class="card">
-            <h2>2. Multi-Cloud RBAC & WIF Federation Matrix</h2>
+            <h2>2. Multi-Cloud RBAC & Workforce Identity Federation Matrix</h2>
             <div style="font-size: 12px; color: var(--text-muted); line-height: 1.6;">
               <div style="color: var(--primary); font-weight: 700; margin-bottom: 2px;">Azure Cloud Storage & Graph:</div>
               <div>&bull; <b>Tenant ID</b>: <code>81f26b58-159c-4879-80a0-bab30b5b4dd3</code> (Entra ID)</div>
@@ -485,13 +485,12 @@
               <div>&bull; <b>Container <code>app2</code></b>: Alice, Bob & Charlie (Contributor / Reader)</div>
               <div>&bull; <b>Microsoft Graph</b>: Alice (<span style="color:var(--success)">Mail.Send</span>) | Charlie & Bob (<b style="color:var(--danger)">Zero Access</b>)</div>
               
-              <div style="color: #ea4335; font-weight: 700; margin-top: 8px; margin-bottom: 2px;">Google Cloud Workload Identity Federation:</div>
+              <div style="color: #ea4335; font-weight: 700; margin-top: 8px; margin-bottom: 2px;">Google Cloud Workforce Identity Federation (Workforce Pools):</div>
               <div>&bull; <b>Project</b>: <code>wifdemoproject-507002</code> (Number: <code>834200279688</code>)</div>
-              <div>&bull; <b>WIF Pool</b>: <code>k8s-agent-pool</code> / Provider: <code>spire-oidc-provider</code></div>
-              <div>&bull; <b>Service Account Proxy</b>: <code>gcp-mcp-sa@wifdemoproject-507002.iam.gserviceaccount.com</code></div>
-              <div>&bull; <b>Why Alice/Bob aren't in Google Console</b>: Federated dynamically via WIF Pool without console IAM accounts. Bound physically by <b>Credential Access Boundaries (CAB)</b> & stamped onto BigQuery Job Labels!</div>
-              <div>&bull; <b>BigQuery Query (Sales)</b>: Alice & Bob (<span style="color:var(--success)">Allowed</span>) | Charlie (<b style="color:var(--danger)">Denied by Gate 1</b>)</div>
-              <div>&bull; <b>BigQuery Audit Logs</b>: Alice (<span style="color:var(--success)">Admin Allowed</span>) | Bob (<b style="color:var(--danger)">Denied by Gate 1</b>)</div>
+              <div>&bull; <b>Workforce Pool</b>: <code>locations/global/workforcePools/enterprise-workforce-pool/providers/keycloak-workforce-provider</code></div>
+              <div>&bull; <b>IAM Principals</b>: <code>principal://iam.googleapis.com/.../workforcePools/enterprise-workforce-pool/subject/{email}</code></div>
+              <div>&bull; <b>BigQuery Dataset IAM (Terraform)</b>: Alice (Viewer on <code>analytics_data</code> + Admin on <code>audit_logs</code>) | Bob (Viewer on <code>analytics_data</code> ONLY) | Charlie (Zero IAM grants)</div>
+              <div>&bull; <b>Credential Access Boundaries (CAB)</b>: STS mints downscoped token bounded strictly to <code>analytics_data.regional_sales</code></div>
             </div>
           </div>
 
@@ -1008,7 +1007,7 @@
       // Parse & Display Google Cloud IAM / Google STS Token
       const googleDecoded = parseJwt(currentGoogleToken) || {
         iss: 'https://sts.googleapis.com',
-        aud: '//iam.googleapis.com/projects/834200279688/locations/global/workloadIdentityPools/k8s-agent-pool/providers/spire-oidc-provider',
+        aud: '//iam.googleapis.com/locations/global/workforcePools/enterprise-workforce-pool/providers/keycloak-workforce-provider',
         sub: currentUser.email,
         roles: currentUser.roles,
         scope: currentUser.scopes.filter(s => s.startsWith('mcp:bigquery:')).join(' ') || 'mcp:bigquery:query'

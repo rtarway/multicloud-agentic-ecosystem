@@ -10,7 +10,8 @@ const GCP_PROJECT_NUMBER = process.env.GCP_PROJECT_NUMBER || '834200279688';
 const VALID_GCP_ISSUERS = [
   'https://accounts.google.com',
   'https://sts.googleapis.com',
-  `//iam.googleapis.com/projects/${GCP_PROJECT_NUMBER}/locations/global/workloadIdentityPools/k8s-agent-pool/providers/spire-oidc-provider`
+  `//iam.googleapis.com/projects/${GCP_PROJECT_NUMBER}/locations/global/workloadIdentityPools/k8s-agent-pool/providers/spire-oidc-provider`,
+  '//iam.googleapis.com/locations/global/workforcePools/enterprise-workforce-pool/providers/keycloak-workforce-provider'
 ];
 
 const EXPECTED_AUDIENCES = [
@@ -20,7 +21,8 @@ const EXPECTED_AUDIENCES = [
   'https://gcp-mcp-server-ur5vhsneiq-uc.a.run.app/mcp',
   `//iam.googleapis.com/projects/${GCP_PROJECT_ID}`,
   `https://bigquery.googleapis.com/`,
-  'api://gcp-bigquery-service'
+  'api://gcp-bigquery-service',
+  '//iam.googleapis.com/locations/global/workforcePools/enterprise-workforce-pool/providers/keycloak-workforce-provider'
 ];
 
 const AUTHORIZED_SENDERS = [

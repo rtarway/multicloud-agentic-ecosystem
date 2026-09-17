@@ -18,13 +18,16 @@ const ENTRA_AGENT_CLIENT_ID = process.env.ENTRA_AGENT_CLIENT_ID || 'a23206e1-2dd
 const ENTRA_MCP_APP_ID = process.env.ENTRA_MCP_APP_ID || 'd5850aa0-a667-41c3-8dd0-16f2dee4da25';
 const ENTRA_AUDIENCE = process.env.ENTRA_AUDIENCE || `api://${ENTRA_MCP_APP_ID}`;
 
-// GCP Configurations
+// GCP Configurations (Workforce Identity Federation for Human Users + SPIRE Workload Pool)
 const GCP_PROJECT_ID = process.env.GCP_PROJECT_ID || 'wifdemoproject-507002';
 const GCP_PROJECT_NUMBER = process.env.GCP_PROJECT_NUMBER || '834200279688';
+const GCP_WORKFORCE_POOL_ID = process.env.GCP_WORKFORCE_POOL_ID || 'enterprise-workforce-pool';
+const GCP_WORKFORCE_PROVIDER_ID = process.env.GCP_WORKFORCE_PROVIDER_ID || 'keycloak-workforce-provider';
 const GCP_POOL_ID = process.env.GCP_POOL_ID || 'k8s-agent-pool';
 const GCP_PROVIDER_ID = process.env.GCP_PROVIDER_ID || 'spire-oidc-provider';
 const GCP_MCP_AUDIENCE = process.env.GCP_MCP_AUDIENCE || 'gcp-bigquery-mcp-server';
-const GCP_STS_AUDIENCE = `//iam.googleapis.com/projects/${GCP_PROJECT_NUMBER}/locations/global/workloadIdentityPools/${GCP_POOL_ID}/providers/${GCP_PROVIDER_ID}`;
+// Google STS Workforce Identity Pool Audience (RFC 8693)
+const GCP_STS_AUDIENCE = `//iam.googleapis.com/locations/global/workforcePools/${GCP_WORKFORCE_POOL_ID}/providers/${GCP_WORKFORCE_PROVIDER_ID}`;
 const GCP_SERVICE_ACCOUNT = process.env.GCP_SERVICE_ACCOUNT || `gcp-mcp-sa@${GCP_PROJECT_ID}.iam.gserviceaccount.com`;
 
 
@@ -320,7 +323,10 @@ class TokenExchangeEngine {
         google_cloud_iam: {
           projectId: GCP_PROJECT_ID,
           projectNumber: GCP_PROJECT_NUMBER,
-          poolId: GCP_POOL_ID,
+          poolId: GCP_WORKFORCE_POOL_ID,
+          providerId: GCP_WORKFORCE_PROVIDER_ID,
+          federationType: 'WorkforceIdentityFederation',
+          principal: `principal://iam.googleapis.com/locations/global/workforcePools/${GCP_WORKFORCE_POOL_ID}/subject/${userEmail}`,
           serviceAccount: GCP_SERVICE_ACCOUNT,
           cabResource: credentialAccessBoundary.accessBoundary.accessBoundaryRules[0].availableResource
         },

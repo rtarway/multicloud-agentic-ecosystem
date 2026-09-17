@@ -33,9 +33,9 @@ resource "google_iam_workload_identity_pool_provider" "spire_provider" {
   disabled                           = false
 
   attribute_mapping = {
-    "google.subject"       = "assertion.sub"
-    "attribute.spiffe_id"  = "assertion.sub"
-    "attribute.aud"        = "assertion.aud"
+    "google.subject"      = "assertion.sub"
+    "attribute.spiffe_id" = "assertion.sub"
+    "attribute.aud"       = "assertion.aud"
   }
 
   oidc {
@@ -109,5 +109,67 @@ resource "google_service_account_iam_member" "wif_impersonation" {
   service_account_id = google_service_account.gcp_mcp_sa.name
   role               = "roles/iam.workloadIdentityUser"
   member             = "principalSet://iam.googleapis.com/${google_iam_workload_identity_pool.agent_pool.name}/*"
+}
+
+# 9. Google Cloud Workforce Identity Pool (Option 1: Human User Federation for Keycloak)
+# Provides authentic Google Cloud IAM subjects for Alice and Bob without Google Workspace accounts
+resource "google_iam_workforce_pool" "enterprise_workforce_pool" {
+  workforce_pool_id = var.workforce_pool_id
+  parent            = "locations/global"
+  location          = "global"
+  display_name      = "Enterprise Corporate Workforce Identity Pool"
+  description       = "Federates Keycloak enterprise human users into authentic Google Cloud IAM subjects"
+  session_duration  = "3600s"
+  disabled          = false
+}
+
+# 10. Workforce Identity Pool Provider for Keycloak OIDC
+resource "google_iam_workforce_pool_provider" "keycloak_provider" {
+  workforce_pool_id = google_iam_workforce_pool.enterprise_workforce_pool.workforce_pool_id
+  location          = "global"
+  provider_id       = var.workforce_provider_id
+  display_name      = "Corporate Keycloak IdP Provider"
+  description       = "OIDC federation provider mapping Keycloak user assertions into Google IAM subjects"
+  disabled          = false
+
+  attribute_mapping = {
+    "google.subject"       = "assertion.sub"
+    "google.groups"        = "assertion.roles"
+    "attribute.email"      = "assertion.email"
+    "attribute.first_name" = "assertion.given_name"
+  }
+
+  oidc {
+    issuer_uri = var.keycloak_issuer_url
+    client_id  = "multicloud-orchestrator-client"
+    web_sso_config {
+      response_type             = "CODE"
+      assertion_claims_behavior = "MERGE_USER_INFO_OVER_ID_TOKEN"
+    }
+  }
+}
+
+# 11. Google Cloud IAM Policy Grants for Federated Workforce Principals (Alice & Bob)
+# Explicitly grants BigQuery access to Alice and Bob in Google Cloud IAM without Console accounts
+
+# Alice: Full BigQuery Data Viewer on Analytics Dataset
+resource "google_bigquery_dataset_iam_member" "alice_analytics_viewer" {
+  dataset_id = google_bigquery_dataset.analytics_data.dataset_id
+  role       = "roles/bigquery.dataViewer"
+  member     = "principal://iam.googleapis.com/locations/global/workforcePools/${google_iam_workforce_pool.enterprise_workforce_pool.workforce_pool_id}/subject/alice@rtarwaygmail.onmicrosoft.com"
+}
+
+# Alice: Full BigQuery Admin on Audit Logs Dataset
+resource "google_bigquery_dataset_iam_member" "alice_audit_admin" {
+  dataset_id = google_bigquery_dataset.audit_logs.dataset_id
+  role       = "roles/bigquery.admin"
+  member     = "principal://iam.googleapis.com/locations/global/workforcePools/${google_iam_workforce_pool.enterprise_workforce_pool.workforce_pool_id}/subject/alice@rtarwaygmail.onmicrosoft.com"
+}
+
+# Bob: BigQuery Data Viewer on Analytics Dataset ONLY (Blocked on Audit Logs)
+resource "google_bigquery_dataset_iam_member" "bob_analytics_viewer" {
+  dataset_id = google_bigquery_dataset.analytics_data.dataset_id
+  role       = "roles/bigquery.dataViewer"
+  member     = "principal://iam.googleapis.com/locations/global/workforcePools/${google_iam_workforce_pool.enterprise_workforce_pool.workforce_pool_id}/subject/bob@rtarwaygmail.onmicrosoft.com"
 }
 

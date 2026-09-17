@@ -34,3 +34,21 @@ variable "oidc_issuer_url" {
   description = "Public OIDC Issuer URL for SPIRE server"
   default     = "https://spire.example.org"
 }
+
+variable "workforce_pool_id" {
+  type        = string
+  description = "Google Cloud Workforce Identity Pool identifier for human users"
+  default     = "enterprise-workforce-pool"
+}
+
+variable "workforce_provider_id" {
+  type        = string
+  description = "Workforce Identity Provider identifier for Keycloak IdP"
+  default     = "keycloak-workforce-provider"
+}
+
+variable "keycloak_issuer_url" {
+  type        = string
+  description = "Public OIDC Issuer URL for Keycloak Corporate IdP"
+  default     = "http://localhost:8080/realms/azure-wif-realm"
+}

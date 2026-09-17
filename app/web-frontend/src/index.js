@@ -129,9 +129,9 @@ app.post('/api/login', async (req, res) => {
   // 3. Mint Google Cloud IAM / Google STS Subject Token (RS256 PKI)
   const googlePrivateKey = jwtUtil.getGoogleStsPrivateKey();
   const gcpProjectNumber = process.env.GCP_PROJECT_NUMBER || '834200279688';
-  const gcpPoolId = process.env.GCP_POOL_ID || 'k8s-agent-pool';
-  const gcpProviderId = process.env.GCP_PROVIDER_ID || 'spire-oidc-provider';
-  const gcpAudience = `//iam.googleapis.com/projects/${gcpProjectNumber}/locations/global/workloadIdentityPools/${gcpPoolId}/providers/${gcpProviderId}`;
+  const gcpWorkforcePoolId = process.env.GCP_WORKFORCE_POOL_ID || 'enterprise-workforce-pool';
+  const gcpWorkforceProviderId = process.env.GCP_WORKFORCE_PROVIDER_ID || 'keycloak-workforce-provider';
+  const gcpAudience = `//iam.googleapis.com/locations/global/workforcePools/${gcpWorkforcePoolId}/providers/${gcpWorkforceProviderId}`;
 
   const gcpPayload = {
     iss: 'https://sts.googleapis.com',
@@ -142,12 +142,14 @@ app.post('/api/login', async (req, res) => {
     name: user.displayName,
     roles: user.roles,
     scope: user.scopes.filter(s => s.startsWith('mcp:bigquery:')).join(' ') || 'mcp:bigquery:query',
-    identityProvider: 'GoogleCloudIAM_STS',
+    identityProvider: 'GoogleCloudIAM_WorkforceSTS',
     google_cloud_iam: {
       projectId: process.env.GCP_PROJECT_ID || 'wifdemoproject-507002',
       projectNumber: gcpProjectNumber,
-      poolId: gcpPoolId,
-      federationType: 'WorkloadIdentityFederation'
+      poolId: gcpWorkforcePoolId,
+      providerId: gcpWorkforceProviderId,
+      federationType: 'WorkforceIdentityFederation',
+      principal: `principal://iam.googleapis.com/locations/global/workforcePools/${gcpWorkforcePoolId}/subject/${user.email}`
     }
   };
 

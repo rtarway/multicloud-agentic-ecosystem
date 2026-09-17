@@ -274,6 +274,28 @@ describe('A2A Agent Orchestrator & Token Exchange Tests', () => {
     assert.strictEqual(exchangeResult.claims.scope, 'mcp:tool2');
   });
 
+  test('RFC 8693 Token Exchange for GCP mints Workforce Identity Federation claims for Alice', async () => {
+    const aliceKeycloakToken = mintKeycloakToken({
+      sub: 'alice@rtarwaygmail.onmicrosoft.com',
+      roles: ['admin', 'BigQuery.Admin'],
+      scope: 'mcp:bigquery:query mcp:bigquery:audit'
+    });
+
+    const exchangeResult = await tokenExchange.exchangeToken({
+      userToken: aliceKeycloakToken,
+      agentSvid: { spiffeId: 'spiffe://example.org/ns/agent-system/sa/orchestrator-sa' },
+      requestedTool: 'bigquery_query_sales',
+      targetPlatform: 'GCP'
+    });
+
+    assert.strictEqual(exchangeResult.tokenType, 'GCP_IAM_RFC8693_DELEGATION');
+    assert.strictEqual(exchangeResult.claims.google_cloud_iam.federationType, 'WorkforceIdentityFederation');
+    assert.strictEqual(exchangeResult.claims.google_cloud_iam.poolId, 'enterprise-workforce-pool');
+    assert.strictEqual(exchangeResult.claims.google_cloud_iam.providerId, 'keycloak-workforce-provider');
+    assert.strictEqual(exchangeResult.claims.google_cloud_iam.principal, 'principal://iam.googleapis.com/locations/global/workforcePools/enterprise-workforce-pool/subject/alice@rtarwaygmail.onmicrosoft.com');
+    assert.ok(exchangeResult.credentialAccessBoundary);
+  });
+
   test('Orchestrator OPA FGP: Denies execution when weekend policy is triggered', async () => {
     const bobToken = mintKeycloakToken({ sub: 'bob@example.com', roles: ['regular-user'] });
 

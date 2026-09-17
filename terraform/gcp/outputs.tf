@@ -23,3 +23,18 @@ output "service_account_email" {
   value       = google_service_account.gcp_mcp_sa.email
 }
 
+output "workforce_pool_name" {
+  description = "Fully qualified Google Cloud Workforce Identity Pool name"
+  value       = "locations/global/workforcePools/${var.workforce_pool_id}"
+}
+
+output "workforce_provider_name" {
+  description = "Fully qualified Google Cloud Workforce Identity Provider name"
+  value       = "locations/global/workforcePools/${var.workforce_pool_id}/providers/${var.workforce_provider_id}"
+}
+
+output "alice_workforce_principal" {
+  description = "Google Cloud IAM federated principal identifier for Alice"
+  value       = "principal://iam.googleapis.com/locations/global/workforcePools/${var.workforce_pool_id}/subject/alice@rtarwaygmail.onmicrosoft.com"
+}
+

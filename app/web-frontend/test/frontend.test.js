@@ -138,6 +138,9 @@ describe('Web Frontend Tests (Outside SPIRE)', () => {
     const googleDecoded = jwtUtil.decode(res.body.googleIamToken);
     assert.strictEqual(googleDecoded.sub, 'alice@rtarwaygmail.onmicrosoft.com');
     assert.strictEqual(googleDecoded.iss, 'https://sts.googleapis.com');
+    assert.ok(googleDecoded.aud.includes('workforcePools/enterprise-workforce-pool'));
+    assert.strictEqual(googleDecoded.google_cloud_iam.federationType, 'WorkforceIdentityFederation');
+    assert.strictEqual(googleDecoded.google_cloud_iam.principal, 'principal://iam.googleapis.com/locations/global/workforcePools/enterprise-workforce-pool/subject/alice@rtarwaygmail.onmicrosoft.com');
   });
 
   test('POST /api/login for Charlie issues token without Mail.Send scope', async () => {
