@@ -81,7 +81,9 @@ describe('A2A Agent Orchestrator & Token Exchange Tests', () => {
     // Inject mock MCP dispatcher into app.locals to test end-to-end routing without external sockets
     app.locals.mcpDispatcher = async (toolName, toolArgs, oboToken, delegatedUser, correlationId) => {
       const decoded = jwtUtil.decode(oboToken) || {};
-      const scopes = (decoded.scope || '').split(' ');
+      const scopes = typeof decoded.scope === 'string'
+        ? decoded.scope.split(' ')
+        : (Array.isArray(decoded.roles) ? decoded.roles : []);
       const userRoles = delegatedUser?.roles || decoded.roles || [];
 
       // Cloud IAM RBAC: Bob has no role on container app1
@@ -274,7 +276,7 @@ describe('A2A Agent Orchestrator & Token Exchange Tests', () => {
     assert.strictEqual(exchangeResult.claims.scope, 'mcp:tool2');
   });
 
-  test('RFC 8693 Token Exchange for GCP mints Workforce Identity Federation claims for Alice', async () => {
+  test('RFC 8693 Token Exchange for GCP mints Workload Identity Federation claims for Alice', async () => {
     const aliceKeycloakToken = mintKeycloakToken({
       sub: 'alice@rtarwaygmail.onmicrosoft.com',
       roles: ['admin', 'BigQuery.Admin'],
@@ -289,10 +291,10 @@ describe('A2A Agent Orchestrator & Token Exchange Tests', () => {
     });
 
     assert.strictEqual(exchangeResult.tokenType, 'GCP_IAM_RFC8693_DELEGATION');
-    assert.strictEqual(exchangeResult.claims.google_cloud_iam.federationType, 'WorkforceIdentityFederation');
-    assert.strictEqual(exchangeResult.claims.google_cloud_iam.poolId, 'enterprise-workforce-pool');
-    assert.strictEqual(exchangeResult.claims.google_cloud_iam.providerId, 'keycloak-workforce-provider');
-    assert.strictEqual(exchangeResult.claims.google_cloud_iam.principal, 'principal://iam.googleapis.com/locations/global/workforcePools/enterprise-workforce-pool/subject/alice@rtarwaygmail.onmicrosoft.com');
+    assert.strictEqual(exchangeResult.claims.google_cloud_iam.federationType, 'WorkloadIdentityFederation');
+    assert.strictEqual(exchangeResult.claims.google_cloud_iam.poolId, 'k8s-agent-pool');
+    assert.strictEqual(exchangeResult.claims.google_cloud_iam.providerId, 'spire-oidc-provider');
+    assert.strictEqual(exchangeResult.claims.google_cloud_iam.principal, 'principal://iam.googleapis.com/projects/834200279688/locations/global/workloadIdentityPools/k8s-agent-pool/subject/alice@rtarwaygmail.onmicrosoft.com');
     assert.ok(exchangeResult.credentialAccessBoundary);
   });
 

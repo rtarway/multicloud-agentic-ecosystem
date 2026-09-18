@@ -87,7 +87,7 @@ app.post('/mcp', async (req, res) => {
     const correlationId = req.headers['x-correlation-id'] || req.headers['x-ms-client-request-id'] || ('chain-' + Date.now());
     console.log(`[MCP-RPC] Correlation ID: ${correlationId}`);
 
-    const authContext = verifyOboToken(authHeader, delegatedHeader);
+    const authContext = await verifyOboToken(authHeader, delegatedHeader);
     authContext.correlationId = correlationId;
 
     if (!authContext.authenticated) {
@@ -143,7 +143,7 @@ app.get('/api/tools', (req, res) => {
 app.post('/api/tools/:name', async (req, res) => {
   const toolName = req.params.name;
   const authHeader = req.headers['authorization'];
-  const authContext = verifyOboToken(authHeader);
+  const authContext = await verifyOboToken(authHeader);
 
   if (!authContext.authenticated) {
     return res.json({

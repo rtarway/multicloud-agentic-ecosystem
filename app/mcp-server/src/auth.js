@@ -22,7 +22,7 @@ const AUTHORIZED_SENDERS = [
  *   - Keycloak & Local OBO tokens for test environments
  *   - Delegated human user identity via X-Delegated-Identity header or token claim
  */
-function verifyOboToken(authHeader, delegatedHeader) {
+async function verifyOboToken(authHeader, delegatedHeader) {
   if (!authHeader || !authHeader.startsWith('Bearer ')) {
     return {
       authenticated: false,
@@ -34,17 +34,52 @@ function verifyOboToken(authHeader, delegatedHeader) {
 
   try {
     let decoded;
+
+    // Reject insecure symmetric HMAC tokens claiming to be Microsoft Entra ID
     try {
-      decoded = jwtUtil.verify(token, JWT_SECRET);
+      const parts = token.split('.');
+      if (parts.length === 3) {
+        const header = JSON.parse(jwtUtil.base64UrlDecode(parts[0]));
+        if (header.alg === 'HS256') {
+          console.warn(`[MCP-AUTH] 🚨 REJECTED: Insecure symmetric HMAC token detected claiming to be Microsoft Entra ID! RFC 7515 RS256 PKI is required.`);
+          return {
+            authenticated: false,
+            error: 'Security Policy Violation: Insecure symmetric HMAC signature rejected. Azure MCP Server requires authentic Microsoft Entra ID RS256 PKI.'
+          };
+        }
+      }
     } catch {
-      // Decode for inspecting claims if signed asymmetrically by Microsoft Entra ID or Keycloak RS256
-      decoded = jwtUtil.decode(token);
+      // Continue to verification
+    }
+
+    try {
+      decoded = await jwtUtil.verifyEntraToken(token, ENTRA_TENANT_ID);
+    } catch (err) {
+      return {
+        authenticated: false,
+        error: `Cryptographic signature verification failed: ${err.message}`
+      };
     }
 
     if (!decoded) {
       return {
         authenticated: false,
         error: 'Invalid token payload: unable to decode JWT.'
+      };
+    }
+
+    // 0. Issuer Verification (Must be Microsoft Entra ID)
+    const tokenIss = decoded.iss;
+    const isEntraIssuer = tokenIss && (
+      tokenIss === `https://login.microsoftonline.com/${ENTRA_TENANT_ID}/v2.0` ||
+      tokenIss === `https://sts.windows.net/${ENTRA_TENANT_ID}/` ||
+      tokenIss.includes('microsoftonline.com') ||
+      tokenIss.includes('sts.windows.net')
+    );
+    if (!isEntraIssuer) {
+      return {
+        authenticated: false,
+        error: `Token issuer verification failed: Azure MCP Server is protected by Microsoft Entra ID. Received untrusted issuer: '${tokenIss}'.`
       };
     }
 

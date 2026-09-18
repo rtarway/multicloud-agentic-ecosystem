@@ -22,6 +22,7 @@ const EXPECTED_AUDIENCES = [
   `//iam.googleapis.com/projects/${GCP_PROJECT_ID}`,
   `https://bigquery.googleapis.com/`,
   'api://gcp-bigquery-service',
+  `//iam.googleapis.com/projects/${GCP_PROJECT_NUMBER}/locations/global/workloadIdentityPools/k8s-agent-pool/providers/spire-oidc-provider`,
   '//iam.googleapis.com/locations/global/workforcePools/enterprise-workforce-pool/providers/keycloak-workforce-provider'
 ];
 

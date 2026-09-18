@@ -210,6 +210,20 @@ function decode(token) {
   }
 }
 
+function getAzureTestPrivateKey() {
+  const possiblePaths = [
+    path.resolve(__dirname, '../../../certs/azure-test-key.pem'),
+    path.resolve(__dirname, '../../certs/azure-test-key.pem'),
+    path.resolve(process.cwd(), 'certs/azure-test-key.pem')
+  ];
+  for (const keyPath of possiblePaths) {
+    if (fs.existsSync(keyPath)) {
+      return fs.readFileSync(keyPath, 'utf8');
+    }
+  }
+  return null;
+}
+
 module.exports = {
   sign,
   verify,
@@ -217,6 +231,7 @@ module.exports = {
   verifyRS256,
   getGoogleStsPublicKey,
   getGoogleStsPrivateKey,
+  getAzureTestPrivateKey,
   decode,
   base64UrlEncode,
   base64UrlDecode

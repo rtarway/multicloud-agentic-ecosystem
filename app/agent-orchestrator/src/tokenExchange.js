@@ -12,22 +12,37 @@ const { privateKey: rsaPrivateKey } = crypto.generateKeyPairSync('rsa', { modulu
 
 const OBO_SECRET = process.env.JWT_SECRET || 'demo-obo-token-secret-key-2026';
 
+// Load .env if present
+try {
+  const fs = require('fs');
+  const path = require('path');
+  const envPath = path.resolve(__dirname, '../../../.env');
+  if (fs.existsSync(envPath)) {
+    const envLines = fs.readFileSync(envPath, 'utf8').split('\n');
+    for (const line of envLines) {
+      const match = line.match(/^\s*([\w.-]+)\s*=\s*(.*)?\s*$/);
+      if (match && !process.env[match[1]]) {
+        process.env[match[1]] = match[2].trim().replace(/^['"]|['"]$/g, '');
+      }
+    }
+  }
+} catch {}
+
 // Azure Configurations
 const ENTRA_TENANT_ID = process.env.ENTRA_TENANT_ID || '81f26b58-159c-4879-80a0-bab30b5b4dd3';
 const ENTRA_AGENT_CLIENT_ID = process.env.ENTRA_AGENT_CLIENT_ID || 'a23206e1-2dda-4854-aac7-0536d2da2c4c';
+const ENTRA_CLIENT_SECRET = process.env.ENTRA_CLIENT_SECRET;
 const ENTRA_MCP_APP_ID = process.env.ENTRA_MCP_APP_ID || 'd5850aa0-a667-41c3-8dd0-16f2dee4da25';
 const ENTRA_AUDIENCE = process.env.ENTRA_AUDIENCE || `api://${ENTRA_MCP_APP_ID}`;
 
-// GCP Configurations (Workforce Identity Federation for Human Users + SPIRE Workload Pool)
+// GCP Configurations (Workload Identity Federation for Direct Subject IAM Grants + SPIRE Workload Pool)
 const GCP_PROJECT_ID = process.env.GCP_PROJECT_ID || 'wifdemoproject-507002';
 const GCP_PROJECT_NUMBER = process.env.GCP_PROJECT_NUMBER || '834200279688';
-const GCP_WORKFORCE_POOL_ID = process.env.GCP_WORKFORCE_POOL_ID || 'enterprise-workforce-pool';
-const GCP_WORKFORCE_PROVIDER_ID = process.env.GCP_WORKFORCE_PROVIDER_ID || 'keycloak-workforce-provider';
 const GCP_POOL_ID = process.env.GCP_POOL_ID || 'k8s-agent-pool';
 const GCP_PROVIDER_ID = process.env.GCP_PROVIDER_ID || 'spire-oidc-provider';
 const GCP_MCP_AUDIENCE = process.env.GCP_MCP_AUDIENCE || 'gcp-bigquery-mcp-server';
-// Google STS Workforce Identity Pool Audience (RFC 8693)
-const GCP_STS_AUDIENCE = `//iam.googleapis.com/locations/global/workforcePools/${GCP_WORKFORCE_POOL_ID}/providers/${GCP_WORKFORCE_PROVIDER_ID}`;
+// Google STS Workload Identity Pool Audience (RFC 8693)
+const GCP_STS_AUDIENCE = `//iam.googleapis.com/projects/${GCP_PROJECT_NUMBER}/locations/global/workloadIdentityPools/${GCP_POOL_ID}/providers/${GCP_PROVIDER_ID}`;
 const GCP_SERVICE_ACCOUNT = process.env.GCP_SERVICE_ACCOUNT || `gcp-mcp-sa@${GCP_PROJECT_ID}.iam.gserviceaccount.com`;
 
 
@@ -323,10 +338,10 @@ class TokenExchangeEngine {
         google_cloud_iam: {
           projectId: GCP_PROJECT_ID,
           projectNumber: GCP_PROJECT_NUMBER,
-          poolId: GCP_WORKFORCE_POOL_ID,
-          providerId: GCP_WORKFORCE_PROVIDER_ID,
-          federationType: 'WorkforceIdentityFederation',
-          principal: `principal://iam.googleapis.com/locations/global/workforcePools/${GCP_WORKFORCE_POOL_ID}/subject/${userEmail}`,
+          poolId: GCP_POOL_ID,
+          providerId: GCP_PROVIDER_ID,
+          federationType: 'WorkloadIdentityFederation',
+          principal: `principal://iam.googleapis.com/projects/${GCP_PROJECT_NUMBER}/locations/global/workloadIdentityPools/${GCP_POOL_ID}/subject/${userEmail}`,
           serviceAccount: GCP_SERVICE_ACCOUNT,
           cabResource: credentialAccessBoundary.accessBoundary.accessBoundaryRules[0].availableResource
         },
@@ -340,7 +355,7 @@ class TokenExchangeEngine {
 
       return {
         exchangedToken,
-        tokenType: 'GCP_IAM_RFC8693_DELEGATION',
+        tokenType: liveStsToken ? 'GCP_STS_LIVE_TOKEN' : 'GCP_IAM_RFC8693_DELEGATION',
         claims: gcpClaims,
         credentialAccessBoundary,
         delegatedUser: {
@@ -362,25 +377,11 @@ class TokenExchangeEngine {
       };
     }
 
-    // 4. Attempt Live Azure Entra ID WIF Exchange (RFC 7523)
+    // 4. Attempt Live Microsoft Entra ID Token Exchange
+    let liveEntraToken = null;
     try {
-      const header = { alg: 'RS256', typ: 'JWT', kid: 'agent-orchestrator-key-1' };
-      const payload = {
-        iss: 'https://spire.example.org',
-        sub: agentSpiffeId,
-        aud: 'api://AzureADTokenExchange',
-        exp: Math.floor(Date.now() / 1000) + 300,
-        nbf: Math.floor(Date.now() / 1000) - 10,
-        iat: Math.floor(Date.now() / 1000)
-      };
-
-      const b64url = str => Buffer.from(str).toString('base64url');
-      const signInput = `${b64url(JSON.stringify(header))}.${b64url(JSON.stringify(payload))}`;
-      const signature = crypto.sign('sha256', Buffer.from(signInput), { key: rsaPrivateKey, dsig: 'raw' });
-      const clientAssertion = `${signInput}.${signature.toString('base64url')}`;
-
       console.log(`\n=============================================================`);
-      console.log(`[ORCH-WIF] 🌐 Calling Microsoft Entra ID Token Endpoint (RFC 7523):`);
+      console.log(`[ORCH-WIF] 🌐 Requesting Microsoft Entra ID Token (Client Credentials / WIF):`);
       console.log(`[ORCH-WIF]   Endpoint:  https://login.microsoftonline.com/${ENTRA_TENANT_ID}/oauth2/v2.0/token`);
       console.log(`[ORCH-WIF]   Client ID: ${ENTRA_AGENT_CLIENT_ID}`);
       console.log(`[ORCH-WIF]   Audience:  ${targetAudience}`);
@@ -389,20 +390,20 @@ class TokenExchangeEngine {
       const entraResponse = await this._callEntraWifTokenExchange({
         grant_type: 'client_credentials',
         client_id: ENTRA_AGENT_CLIENT_ID,
-        client_assertion_type: 'urn:ietf:params:oauth:client-assertion-type:jwt-bearer',
-        client_assertion: clientAssertion,
+        client_secret: ENTRA_CLIENT_SECRET,
         scope: `${ENTRA_AUDIENCE}/.default`
       });
 
       console.log(`[ORCH-WIF] 📡 Entra ID Token Response: HTTP ${entraResponse.statusCode}`);
       if (entraResponse.statusCode === 200 && entraResponse.body.access_token) {
-        console.log(`[ORCH-WIF]   ✅ Token successfully minted by Microsoft Entra ID!`);
+        console.log(`[ORCH-WIF]   ✅ Real Microsoft Entra ID token acquired!`);
+        liveEntraToken = entraResponse.body.access_token;
       }
     } catch (err) {
-      console.log(`[ORCH-WIF] ⚠️ Entra Token Exchange call error: ${err.message}`);
+      console.log(`[ORCH-WIF] ℹ️ Entra Token call note: ${err.message}`);
     }
 
-    // 5. High-Fidelity Entra ID / RFC 8693 Bearer Token
+    // 5. Build Entra ID RFC 8693 Token Claims (RS256 PKI - Never Symmetric HMAC)
     const entraClaims = {
       iss: `https://login.microsoftonline.com/${ENTRA_TENANT_ID}/v2.0`,
       tid: ENTRA_TENANT_ID,
@@ -420,11 +421,14 @@ class TokenExchangeEngine {
       delegationType: 'RFC8693_MULTI_HOP_CHAIN'
     };
 
-    const exchangedToken = jwtUtil.sign(entraClaims, OBO_SECRET, { expiresInSeconds: 300 });
+    const azureTestKey = jwtUtil.getAzureTestPrivateKey();
+    const exchangedToken = liveEntraToken || (azureTestKey
+      ? jwtUtil.signRS256(entraClaims, azureTestKey, { kid: 'azure-test-key-1', expiresInSeconds: 300 })
+      : jwtUtil.signRS256(entraClaims, rsaPrivateKey, { kid: 'azure-orchestrator-key-1', expiresInSeconds: 300 }));
 
     return {
       exchangedToken,
-      tokenType: 'AZURE_ENTRA_WIF_SIMULATION',
+      tokenType: liveEntraToken ? 'AZURE_ENTRA_WIF_LIVE' : 'AZURE_ENTRA_WIF_RS256_TEST',
       claims: entraClaims,
       delegatedUser: {
         sub: userEmail,

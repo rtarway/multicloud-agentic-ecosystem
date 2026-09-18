@@ -7,22 +7,27 @@ const { Readable, Writable } = require('stream');
 const jwtUtil = require('../src/jwtUtil');
 const app = require('../src/index');
 
-const TEST_SECRET = 'demo-obo-token-secret-key-2026';
+const azureTestKey = jwtUtil.getAzureTestKey();
 
 function mintOboToken({ sub, actSub, scopes, roles }) {
-  return jwtUtil.sign(
-    {
-      sub,
-      email: sub,
-      roles: roles || (sub?.includes('alice') ? ['auditor', 'Storage Blob Data Reader'] : ['regular-user']),
-      act: {
-        sub: actSub || 'spiffe://example.org/ns/agent-system/sa/orchestrator-sa'
-      },
-      scope: Array.isArray(scopes) ? scopes.join(' ') : scopes
+  const payload = {
+    iss: 'https://login.microsoftonline.com/81f26b58-159c-4879-80a0-bab30b5b4dd3/v2.0',
+    tid: '81f26b58-159c-4879-80a0-bab30b5b4dd3',
+    aud: 'api://d5850aa0-a667-41c3-8dd0-16f2dee4da25',
+    sub,
+    email: sub,
+    appid: 'a23206e1-2dda-4854-aac7-0536d2da2c4c',
+    roles: roles || (sub?.includes('alice') ? ['auditor', 'Storage Blob Data Reader'] : ['regular-user']),
+    act: {
+      sub: actSub || 'spiffe://example.org/ns/agent-system/sa/orchestrator-sa'
     },
-    TEST_SECRET,
-    { expiresInSeconds: 300 }
-  );
+    scope: Array.isArray(scopes) ? scopes.join(' ') : scopes
+  };
+
+  if (azureTestKey) {
+    return jwtUtil.signRS256(payload, azureTestKey, { kid: 'azure-test-key-1', expiresInSeconds: 300 });
+  }
+  return jwtUtil.sign(payload, TEST_SECRET, { expiresInSeconds: 300 });
 }
 
 function invokeApp(appInstance, { method = 'POST', url = '/mcp', headers = {}, body = null }) {
@@ -302,18 +307,29 @@ describe('Azure Low-Code MCP Server Tests (Protocol Spec July 2026)', () => {
   });
 
   test('RFC 8693 Cryptographic Delegation Chain: Rejects tokens with untrusted or rogue actors', async () => {
-    const rogueToken = jwtUtil.sign(
-      {
-        sub: 'alice@example.com',
-        aud: 'api://d5850aa0-a667-41c3-8dd0-16f2dee4da25',
-        act: {
-          sub: 'untrusted-bad-actor-proxy'
-        },
-        scope: 'mcp:tool1'
-      },
-      TEST_SECRET,
-      { expiresInSeconds: 300 }
-    );
+    const rogueToken = azureTestKey
+      ? jwtUtil.signRS256(
+          {
+            iss: 'https://login.microsoftonline.com/81f26b58-159c-4879-80a0-bab30b5b4dd3/v2.0',
+            tid: '81f26b58-159c-4879-80a0-bab30b5b4dd3',
+            aud: 'api://d5850aa0-a667-41c3-8dd0-16f2dee4da25',
+            sub: 'alice@example.com',
+            email: 'alice@example.com',
+            appid: 'a23206e1-2dda-4854-aac7-0536d2da2c4c',
+            roles: ['auditor', 'Storage Blob Data Reader'],
+            act: {
+              sub: 'spiffe://rogue-cluster.evil.com/ns/hack/sa/rogue-pod'
+            },
+            scope: 'mcp:tool1'
+          },
+          azureTestKey,
+          { kid: 'azure-test-key-1', expiresInSeconds: 300 }
+        )
+      : mintOboToken({
+          sub: 'alice@example.com',
+          actSub: 'spiffe://rogue-cluster.evil.com/ns/hack/sa/rogue-pod',
+          scopes: ['mcp:tool1']
+        });
 
     const res = await rpcRequest(
       'tools/call',
@@ -329,14 +345,17 @@ describe('Azure Low-Code MCP Server Tests (Protocol Spec July 2026)', () => {
   });
 
   test('Azure WIF & Entra ID Protection: Validates Microsoft Entra token with app roles and delegated user identity', async () => {
-    const entraToken = jwtUtil.sign({
+    const entraTokenPayload = {
       iss: 'https://login.microsoftonline.com/81f26b58-159c-4879-80a0-bab30b5b4dd3/v2.0',
       tid: '81f26b58-159c-4879-80a0-bab30b5b4dd3',
       aud: 'api://d5850aa0-a667-41c3-8dd0-16f2dee4da25',
       sub: 'a23206e1-2dda-4854-aac7-0536d2da2c4c',
       appid: 'a23206e1-2dda-4854-aac7-0536d2da2c4c',
       roles: ['mcp:tool1']
-    }, TEST_SECRET, { expiresInSeconds: 300 });
+    };
+    const entraToken = azureTestKey
+      ? jwtUtil.signRS256(entraTokenPayload, azureTestKey, { kid: 'azure-test-key-1', expiresInSeconds: 300 })
+      : jwtUtil.sign(entraTokenPayload, 'dummy', { expiresInSeconds: 300 });
 
     const delegatedUserHeader = JSON.stringify({
       sub: 'alice@example.com',

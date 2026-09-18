@@ -105,33 +105,35 @@ app.post('/api/login', async (req, res) => {
     { expiresInSeconds: 3600 }
   );
 
-  // 2. Mint Microsoft Entra ID User Subject Token
-  const entraToken = jwtUtil.sign(
-    {
-      iss: `https://login.microsoftonline.com/${ENTRA_TENANT_ID}/v2.0`,
-      tid: ENTRA_TENANT_ID,
-      aud: ENTRA_AUDIENCE,
-      sub: user.email,
-      upn: user.email,
-      email: user.email,
-      name: user.displayName,
-      appid: ENTRA_CLIENT_ID,
-      azp: ENTRA_CLIENT_ID,
-      roles: user.roles,
-      scp: user.scopes.join(' '),
-      scope: user.scopes.join(' '),
-      identityProvider: 'EntraID'
-    },
-    JWT_SECRET,
-    { expiresInSeconds: 3600 }
-  );
+  // 2. Mint Microsoft Entra ID User Subject Token (Authentic RS256 PKI)
+  const azureTestKey = jwtUtil.getAzureTestPrivateKey();
+  const entraPayload = {
+    iss: `https://login.microsoftonline.com/${ENTRA_TENANT_ID}/v2.0`,
+    tid: ENTRA_TENANT_ID,
+    aud: ENTRA_AUDIENCE,
+    sub: user.email,
+    upn: user.email,
+    email: user.email,
+    name: user.displayName,
+    appid: ENTRA_CLIENT_ID,
+    azp: ENTRA_CLIENT_ID,
+    roles: user.roles,
+    scp: user.scopes.join(' '),
+    scope: user.scopes.join(' '),
+    identityProvider: 'EntraID'
+  };
 
-  // 3. Mint Google Cloud IAM / Google STS Subject Token (RS256 PKI)
+  const entraToken = azureTestKey
+    ? jwtUtil.signRS256(entraPayload, azureTestKey, { kid: 'azure-test-key-1', expiresInSeconds: 3600 })
+    : jwtUtil.sign(entraPayload, JWT_SECRET, { expiresInSeconds: 3600 });
+
+  // 3. Mint Google Cloud IAM / Google STS Subject Token (RS256 PKI - Option 3 Workload Identity Pool)
   const googlePrivateKey = jwtUtil.getGoogleStsPrivateKey();
   const gcpProjectNumber = process.env.GCP_PROJECT_NUMBER || '834200279688';
-  const gcpWorkforcePoolId = process.env.GCP_WORKFORCE_POOL_ID || 'enterprise-workforce-pool';
-  const gcpWorkforceProviderId = process.env.GCP_WORKFORCE_PROVIDER_ID || 'keycloak-workforce-provider';
-  const gcpAudience = `//iam.googleapis.com/locations/global/workforcePools/${gcpWorkforcePoolId}/providers/${gcpWorkforceProviderId}`;
+  const gcpProjectId = process.env.GCP_PROJECT_ID || 'wifdemoproject-507002';
+  const gcpPoolId = process.env.GCP_POOL_ID || 'k8s-agent-pool';
+  const gcpProviderId = process.env.GCP_PROVIDER_ID || 'spire-oidc-provider';
+  const gcpAudience = `//iam.googleapis.com/projects/${gcpProjectNumber}/locations/global/workloadIdentityPools/${gcpPoolId}/providers/${gcpProviderId}`;
 
   const gcpPayload = {
     iss: 'https://sts.googleapis.com',
@@ -142,14 +144,14 @@ app.post('/api/login', async (req, res) => {
     name: user.displayName,
     roles: user.roles,
     scope: user.scopes.filter(s => s.startsWith('mcp:bigquery:')).join(' ') || 'mcp:bigquery:query',
-    identityProvider: 'GoogleCloudIAM_WorkforceSTS',
+    identityProvider: 'GoogleCloudIAM_WorkloadSTS',
     google_cloud_iam: {
-      projectId: process.env.GCP_PROJECT_ID || 'wifdemoproject-507002',
+      projectId: gcpProjectId,
       projectNumber: gcpProjectNumber,
-      poolId: gcpWorkforcePoolId,
-      providerId: gcpWorkforceProviderId,
-      federationType: 'WorkforceIdentityFederation',
-      principal: `principal://iam.googleapis.com/locations/global/workforcePools/${gcpWorkforcePoolId}/subject/${user.email}`
+      poolId: gcpPoolId,
+      providerId: gcpProviderId,
+      federationType: 'WorkloadIdentityFederation',
+      principal: `principal://iam.googleapis.com/projects/${gcpProjectNumber}/locations/global/workloadIdentityPools/${gcpPoolId}/subject/${user.email}`
     }
   };
 
