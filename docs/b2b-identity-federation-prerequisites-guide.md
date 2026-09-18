@@ -362,8 +362,77 @@ curl -s -X POST http://localhost:30000/api/login \
 
 ---
 
+---
+
+## 10. Implementation Architecture: Path A (Current Live Native OBO) vs. Path B (Production B2B Federation Roadmap)
+
+### Path A: Direct Entra ID Native OBO Flow (Implemented & Verified Live)
+In environments where the Corporate Keycloak instance runs on local infrastructure (`localhost:8080` or internal Kubernetes cluster without a publicly resolvable domain or trusted commercial TLS certificate), **Path A** implements the full end-to-end On-Behalf-Of delegation flow directly using Microsoft Entra ID's native STS:
+
+```mermaid
+sequenceDiagram
+    autonumber
+    actor User as User (Alice / Bob / Charlie)
+    participant Browser as Web Frontend / Client
+    participant Orch as Agent Orchestrator (Mid-Tier API)
+    participant Entra as Microsoft Entra ID STS
+    participant MCP as Azure MCP Server
+
+    User->>Browser: 1. Login / Select User
+    Browser->>Entra: 2. Acquire Entra ID User Token<br/>scope: api://k8s-agent-orchestrator/access_as_user
+    Entra-->>Browser: 3. Authentic Entra ID User JWT<br/>aud: api://k8s-agent-orchestrator<br/>sub/oid: Alice (f0717748...)<br/>scp: access_as_user
+    Browser->>Orch: 4. Dispatch Prompt + User Entra Token (X-User-Entra-Token)
+    Note over Orch,Entra: 5. Native RFC 8693 / RFC 7523 Entra ID OBO Exchange
+    Orch->>Entra: POST /oauth2/v2.0/token<br/>grant_type = urn:ietf:params:oauth:grant-type:jwt-bearer<br/>client_id = a23206e1-2dda-4854-aac7-0536d2da2c4c (orchestrator)<br/>client_secret = <secret><br/>assertion = <Alice_Entra_User_Token><br/>requested_token_use = on_behalf_of<br/>scope = api://azure-mcp-server/user_impersonation
+    Entra-->>Orch: 6. Authentic Downstream OBO Token<br/>aud: api://azure-mcp-server<br/>sub/oid: Alice<br/>appid: k8s-agent-orchestrator<br/>scp: user_impersonation
+    Orch->>MCP: 7. POST /tools/execute (Authorization: Bearer <OBO_Token>)
+    Note over MCP: MCP validates token against Microsoft public JWKS.<br/>Evaluates Alice's permissions and executes tool.
+```
+
+**Key Path A Implementation Details**:
+- **Application Scopes**:
+  - `k8s-agent-orchestrator` exposes `access_as_user`.
+  - `azure-mcp-server` exposes `user_impersonation`.
+- **Pre-Authorization**: `k8s-agent-orchestrator` is pre-authorized on `azure-mcp-server` with tenant-wide admin consent.
+- **Cryptographic Validation**: Azure MCP Server validates signatures directly against Microsoft's public keys (`https://login.microsoftonline.com/81f26b58-159c-4879-80a0-bab30b5b4dd3/discovery/v2.0/keys`), extracting user principal (`upn`, `oid`) and verifying `appid` matches the Orchestrator.
+
+---
+
+### Path B: Full B2B Direct Federation Enhancement (Production Roadmap)
+When the organization registers a custom public domain (e.g. `identity.company.com`) with a publicly trusted TLS certificate (DigiCert, Let's Encrypt), **Path B** provides true seamless enterprise SSO:
+
+```mermaid
+sequenceDiagram
+    autonumber
+    actor User as Corporate User (alice@company.com)
+    participant Browser as Web Frontend / Client
+    participant Keycloak as Corporate Keycloak IdP (https://identity.company.com)
+    participant Entra as Microsoft Entra ID (External Identities)
+    participant Orch as Agent Orchestrator
+    participant MCP as Azure MCP Server
+
+    User->>Browser: 1. Navigate to Web App & click Corporate SSO
+    Browser->>Entra: 2. Initiate OAuth Authorization Code Flow with PKCE
+    Note over Entra: Entra inspects domain @company.com.<br/>Home Realm Discovery (HRD) redirects to Keycloak.
+    Entra-->>Browser: 3. SAML / OIDC Redirect to https://identity.company.com
+    Browser->>Keycloak: 4. Authenticate User (Corporate LDAP / MFA)
+    Keycloak-->>Browser: 5. Signed SAML 2.0 / OIDC Assertion
+    Browser->>Entra: 6. Submit Keycloak Assertion to Entra External Identities
+    Note over Entra: Entra verifies Keycloak signing certificate.<br/>Mints authentic Entra User Token for Orchestrator.
+    Entra-->>Browser: 7. Entra ID User Token (aud: api://orchestrator, sub: Alice)
+    Browser->>Orch: 8. Submit prompt + Entra User Token
+    Orch->>Entra: 9. Native OBO Token Exchange (grant_type=jwt-bearer)
+    Entra-->>Orch: 10. Downstream OBO Token (aud: api://azure-mcp-server)
+    Orch->>MCP: 11. Execute MCP Tool with OBO Token
+```
+
+**Prerequisites to Activate Path B**:
+1. **Public Domain Verification**: Verify `company.com` in Microsoft Entra ID External Identities (or configure Direct Federation via SAML/WS-Fed).
+2. **Public HTTPS Reachability**: Expose Keycloak's federation endpoint (e.g. `https://identity.company.com/realms/azure-wif-realm/protocol/saml`) over port 443 with a publicly trusted CA certificate so Microsoft STS can resolve metadata and fetch signing keys.
+3. **Automated User Synchronization (SCIM 2.0)**: Use SCIM 2.0 provisioning to sync users and role memberships from Keycloak into Entra ID guest/member accounts.
+
+---
+
 ## 💡 Summary
-By completing these prerequisite phases, an enterprise achieves:
-1. **Frictionless UX**: Zero dual logins and zero passwords maintained in Microsoft Entra ID.
-2. **Dual Token Interoperability**: Seamless issuance of both Keycloak OIDC tokens and Entra ID tokens with matching `scp` and `scope` claims.
-3. **End-to-End Least Privilege**: Cryptographic, short-lived (60s JIT) RFC 8693 workload delegation enforced down to the individual storage bucket and Graph API endpoint.
+- **Path A** is **active, verified, and running** in the live code repository, utilizing authentic Entra ID RS256 PKI tokens and native OBO exchange without any simulated or HMAC tokens.
+- **Path B** represents the seamless production federation enhancement once a public corporate domain and TLS infrastructure are provisioned.

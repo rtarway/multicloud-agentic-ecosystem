@@ -1062,9 +1062,10 @@
           method: 'POST',
           headers: {
             'Content-Type': 'application/json',
-            'Authorization': `Bearer ${currentToken}`
+            'Authorization': `Bearer ${currentToken}`,
+            'X-User-Entra-Token': currentEntraToken || ''
           },
-          body: JSON.stringify({ prompt, token: currentToken, emailConfig })
+          body: JSON.stringify({ prompt, token: currentToken, userEntraToken: currentEntraToken, emailConfig })
         });
 
         const data = await res.json();

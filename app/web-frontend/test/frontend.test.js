@@ -163,8 +163,9 @@ describe('Web Frontend Tests (Outside SPIRE)', () => {
     assert.strictEqual(decoded.scope, 'mcp:tool1 mcp:tool2');
 
     const decodedEntra = jwtUtil.decode(res.body.entraToken);
-    assert.strictEqual(decodedEntra.sub, 'charlie@rtarwaygmail.onmicrosoft.com');
-    assert.strictEqual(decodedEntra.scope, 'mcp:tool1 mcp:tool2');
+    const entraUser = decodedEntra.upn || decodedEntra.unique_name || decodedEntra.email || decodedEntra.sub;
+    assert.strictEqual(entraUser, 'charlie@rtarwaygmail.onmicrosoft.com');
+    assert.ok(decodedEntra.scp === 'access_as_user' || decodedEntra.scope?.includes('mcp:tool1') || decodedEntra.scope === 'access_as_user');
   });
 
   test('GET /api/users returns Alice, Bob, and Charlie with credentials and permissions', async () => {

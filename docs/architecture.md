@@ -210,28 +210,34 @@ sequenceDiagram
 - **Istio Mesh**: Configured with Citadel CA disabled, delegating all internal pod mTLS certificates to SPIRE.
 - **Simulated LLM Engine**: Parses natural language prompt, determines target storage container (`app1` vs `app2`), operation (`read` vs `write`), and tool (`tool1` vs `tool2`).
 
-### 3.4 RFC 8693 On-Behalf-Of (OBO) Token Exchange & Downscoping
-When the agent prepares to invoke the MCP server:
-1. It presents:
-   - **Subject Token**: User's Keycloak JWT.
-   - **Actor Token**: Agent's SPIRE JWT-SVID.
-2. The downscoping engine computes:
-   - If user is `regular-user`: Downscopes scope strictly to `mcp:tool1`.
-   - If user is `admin`: Downscopes scope to `mcp:tool1 mcp:tool2`.
-3. The resulting token carries the complete delegation audit chain:
+### 3.4 Microsoft Entra ID Native On-Behalf-Of (OBO) Token Exchange & Downscoping
+When the agent prepares to invoke the Azure MCP server:
+1. **User Token Presentation**:
+   - The user authenticates (Alice, Bob, or Charlie) and obtains an authentic Microsoft Entra ID User Token (`aud: api://k8s-agent-orchestrator`, `scp: access_as_user`).
+2. **Native Entra ID OBO Exchange**:
+   - The Orchestrator presents:
+     - `grant_type: urn:ietf:params:oauth:grant-type:jwt-bearer`
+     - `client_id: a23206e1-2dda-4854-aac7-0536d2da2c4c` (k8s-agent-orchestrator)
+     - `client_secret: <secret>`
+     - `assertion: <Alice_Entra_User_Token>`
+     - `requested_token_use: on_behalf_of`
+     - `scope: api://d5850aa0-a667-41c3-8dd0-16f2dee4da25/user_impersonation`
+3. **Downstream Delegated OBO Token**:
+   - Microsoft Entra ID STS mints an RS256 token signed by Microsoft's public PKI:
    ```json
    {
-     "iss": "https://identity.example.com/realms/azure-wif-realm",
-     "sub": "bob@example.com",
-     "aud": "azure-mcp-server",
-     "act": {
-       "sub": "spiffe://example.org/ns/agent-system/sa/orchestrator-sa"
-     },
-     "scope": "mcp:tool1",
-     "downscoped": true,
-     "delegationType": "RFC8693_OBO"
+     "aud": "api://d5850aa0-a667-41c3-8dd0-16f2dee4da25",
+     "iss": "https://sts.windows.net/81f26b58-159c-4879-80a0-bab30b5b4dd3/",
+     "sub": "1Gb5kjxZoWHFZg_kF96ChAANCZF7CtHh0LZPJ-pjhrw",
+     "oid": "f0717748-78aa-43ae-a396-56df193e50ea",
+     "upn": "alice@rtarwaygmail.onmicrosoft.com",
+     "appid": "a23206e1-2dda-4854-aac7-0536d2da2c4c",
+     "scp": "user_impersonation"
    }
    ```
+4. **Scope & Tool Governance**:
+   - The Azure MCP Server validates the token against Microsoft's public JWKS.
+   - It verifies that the calling application is `k8s-agent-orchestrator` (`appid: a23206e1-...`) and that the delegated human user is Alice/Bob, enforcing tool RBAC and in-process FGP.
 
 ### 3.5 Azure Low-Code Declarative MCP Server
 - **MCP Protocol Specification**: Implements protocol version `2026-07-15` (July 2026 release) with JSON-RPC 2.0 endpoints:

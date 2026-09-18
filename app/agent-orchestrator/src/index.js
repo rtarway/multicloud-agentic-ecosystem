@@ -189,14 +189,15 @@ function decodeTokenComplete(token) {
 
 // Agent Chat & Execution Endpoint
 app.post('/api/agent/chat', async (req, res) => {
-  const { prompt } = req.body || {};
+  const { prompt, userEntraToken } = req.body || {};
   const authHeader = req.headers['authorization'] || req.headers['Authorization'];
+  const activeEntraAssertion = userEntraToken || req.headers['x-user-entra-token'] || null;
 
   if (!prompt) {
     return res.status(400).json({ error: 'Missing prompt parameter.' });
   }
 
-  // 1. Inspect User Identity from Keycloak Token
+  // 1. Inspect User Identity from Keycloak Token or Entra User Assertion
   let userToken = null;
   let userClaims = { sub: 'guest@example.com', roles: ['regular-user'] };
 
@@ -205,9 +206,18 @@ app.post('/api/agent/chat', async (req, res) => {
     const decoded = jwtUtil.decode(userToken);
     if (decoded) {
       userClaims = {
-        sub: decoded.sub || decoded.preferred_username || 'anonymous',
-        email: decoded.email || decoded.sub,
+        sub: decoded.sub || decoded.preferred_username || decoded.unique_name || 'anonymous',
+        email: decoded.email || decoded.upn || decoded.unique_name || decoded.sub,
         roles: Array.isArray(decoded.roles) ? decoded.roles : (decoded.realm_access?.roles || ['regular-user'])
+      };
+    }
+  } else if (activeEntraAssertion) {
+    const decoded = jwtUtil.decode(activeEntraAssertion);
+    if (decoded) {
+      userClaims = {
+        sub: decoded.sub || decoded.preferred_username || decoded.unique_name || 'anonymous',
+        email: decoded.email || decoded.upn || decoded.unique_name || decoded.sub,
+        roles: Array.isArray(decoded.roles) ? decoded.roles : ['regular-user']
       };
     }
   }
@@ -284,6 +294,7 @@ app.post('/api/agent/chat', async (req, res) => {
     const step1 = plan.steps[0];
     const step1Exchange = await tokenExchange.exchangeToken({
       userToken,
+      userEntraToken: activeEntraAssertion,
       agentSvid,
       targetAudience: entraAudience,
       requestedTool: step1.tool,
@@ -656,6 +667,7 @@ app.post('/api/agent/chat', async (req, res) => {
     const step1 = plan.steps[0];
     const step1Exchange = await tokenExchange.exchangeToken({
       userToken,
+      userEntraToken: activeEntraAssertion,
       agentSvid,
       targetAudience: entraAudience,
       requestedTool: step1.tool
@@ -716,6 +728,7 @@ app.post('/api/agent/chat', async (req, res) => {
       const step2 = plan.steps[1];
       step2Exchange = await tokenExchange.exchangeToken({
         userToken,
+        userEntraToken: activeEntraAssertion,
         agentSvid,
         targetAudience: entraAudience,
         requestedTool: step2.tool
@@ -1104,6 +1117,7 @@ app.post('/api/agent/chat', async (req, res) => {
 
   const exchangeResult = await tokenExchange.exchangeToken({
     userToken,
+    userEntraToken: activeEntraAssertion,
     agentSvid,
     targetAudience,
     requestedTool: plan.plannedTool

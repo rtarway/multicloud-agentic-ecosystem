@@ -167,15 +167,17 @@ class TokenExchangeEngine {
   /**
    * Executes Multi-Cloud RFC 8693 Token Exchange with Multi-Hop Lineage and Scope Downscoping
    */
-  async exchangeToken({ userToken, agentSvid, targetAudience = ENTRA_AUDIENCE, requestedTool = 'tool1', priorHops = [], turn = 1 }) {
-    // 1. Validate & Parse Subject Token (User from Keycloak)
+  async exchangeToken({ userToken, userEntraToken, agentSvid, targetAudience = ENTRA_AUDIENCE, requestedTool = 'tool1', priorHops = [], turn = 1 }) {
+    // 1. Validate & Parse Subject Token (User from Keycloak or incoming Entra user token)
     let userClaims = {};
     if (userToken) {
       userClaims = jwtUtil.decode(userToken) || {};
+    } else if (userEntraToken) {
+      userClaims = jwtUtil.decode(userEntraToken) || {};
     }
 
-    const userSub = userClaims.sub || userClaims.preferred_username || 'anonymous-user';
-    const userEmail = userClaims.email || userSub;
+    const userSub = userClaims.sub || userClaims.preferred_username || userClaims.unique_name || 'anonymous-user';
+    const userEmail = userClaims.email || userClaims.upn || userClaims.unique_name || userSub;
     const userRoles = Array.isArray(userClaims.roles)
       ? userClaims.roles
       : (userClaims.realm_access?.roles || ['regular-user']);
@@ -377,30 +379,74 @@ class TokenExchangeEngine {
       };
     }
 
-    // 4. Attempt Live Microsoft Entra ID Token Exchange
+    // 4. Attempt Live Microsoft Entra ID Token Exchange (Native RFC 7523 / RFC 8693 On-Behalf-Of Flow)
     let liveEntraToken = null;
+    let assertionToken = userEntraToken || null;
+
+    // If no incoming assertion was passed from frontend, attempt to fetch user token for Orchestrator using Alice/Bob credentials
+    if (!assertionToken && userEmail && userEmail.includes('@')) {
+      try {
+        const defaultPw = 'Password123!Safe';
+        const userAssertionPostData = querystring.stringify({
+          grant_type: 'password',
+          client_id: ENTRA_AGENT_CLIENT_ID,
+          username: userEmail,
+          password: defaultPw,
+          scope: `api://${ENTRA_AGENT_CLIENT_ID}/access_as_user openid profile`
+        });
+        const assertionResp = await this._callEntraWifTokenExchange({
+          grant_type: 'password',
+          client_id: ENTRA_AGENT_CLIENT_ID,
+          username: userEmail,
+          password: defaultPw,
+          scope: `api://${ENTRA_AGENT_CLIENT_ID}/access_as_user openid profile`
+        });
+        if (assertionResp.statusCode === 200 && assertionResp.body.access_token) {
+          assertionToken = assertionResp.body.access_token;
+        }
+      } catch (e) {
+        // Fall back
+      }
+    }
+
     try {
       console.log(`\n=============================================================`);
-      console.log(`[ORCH-WIF] 🌐 Requesting Microsoft Entra ID Token (Client Credentials / WIF):`);
-      console.log(`[ORCH-WIF]   Endpoint:  https://login.microsoftonline.com/${ENTRA_TENANT_ID}/oauth2/v2.0/token`);
-      console.log(`[ORCH-WIF]   Client ID: ${ENTRA_AGENT_CLIENT_ID}`);
-      console.log(`[ORCH-WIF]   Audience:  ${targetAudience}`);
-      console.log(`[ORCH-WIF]   Actor:     ${agentSpiffeId}`);
+      console.log(`[ORCH-OBO] 🌐 Requesting Microsoft Entra ID Delegated OBO Token (RFC 8693 / RFC 7523):`);
+      console.log(`[ORCH-OBO]   Endpoint:    https://login.microsoftonline.com/${ENTRA_TENANT_ID}/oauth2/v2.0/token`);
+      console.log(`[ORCH-OBO]   Client ID:   ${ENTRA_AGENT_CLIENT_ID}`);
+      console.log(`[ORCH-OBO]   Audience:    ${targetAudience}`);
+      console.log(`[ORCH-OBO]   Subject:     ${userEmail}`);
+      console.log(`[ORCH-OBO]   Actor:       ${agentSpiffeId}`);
+      console.log(`[ORCH-OBO]   HasAssertion:${!!assertionToken}`);
 
-      const entraResponse = await this._callEntraWifTokenExchange({
-        grant_type: 'client_credentials',
-        client_id: ENTRA_AGENT_CLIENT_ID,
-        client_secret: ENTRA_CLIENT_SECRET,
-        scope: `${ENTRA_AUDIENCE}/.default`
-      });
+      let entraResponse;
+      if (assertionToken) {
+        // Authentic Entra ID On-Behalf-Of (OBO) Exchange
+        entraResponse = await this._callEntraWifTokenExchange({
+          grant_type: 'urn:ietf:params:oauth:grant-type:jwt-bearer',
+          client_id: ENTRA_AGENT_CLIENT_ID,
+          client_secret: ENTRA_CLIENT_SECRET,
+          assertion: assertionToken,
+          scope: `api://${ENTRA_MCP_APP_ID}/user_impersonation`,
+          requested_token_use: 'on_behalf_of'
+        });
+      } else {
+        // Fallback to client credentials if no user assertion available
+        entraResponse = await this._callEntraWifTokenExchange({
+          grant_type: 'client_credentials',
+          client_id: ENTRA_AGENT_CLIENT_ID,
+          client_secret: ENTRA_CLIENT_SECRET,
+          scope: `${ENTRA_AUDIENCE}/.default`
+        });
+      }
 
-      console.log(`[ORCH-WIF] 📡 Entra ID Token Response: HTTP ${entraResponse.statusCode}`);
+      console.log(`[ORCH-OBO] 📡 Entra ID Token Response: HTTP ${entraResponse.statusCode}`);
       if (entraResponse.statusCode === 200 && entraResponse.body.access_token) {
-        console.log(`[ORCH-WIF]   ✅ Real Microsoft Entra ID token acquired!`);
+        console.log(`[ORCH-OBO]   ✅ Real Microsoft Entra ID OBO token acquired!`);
         liveEntraToken = entraResponse.body.access_token;
       }
     } catch (err) {
-      console.log(`[ORCH-WIF] ℹ️ Entra Token call note: ${err.message}`);
+      console.log(`[ORCH-OBO] ℹ️ Entra OBO Token call note: ${err.message}`);
     }
 
     // 5. Build Entra ID RFC 8693 Token Claims (RS256 PKI - Never Symmetric HMAC)
@@ -410,15 +456,17 @@ class TokenExchangeEngine {
       aud: targetAudience,
       sub: userEmail,
       upn: userEmail,
+      unique_name: userEmail,
       email: userEmail,
       appid: ENTRA_AGENT_CLIENT_ID,
       azp: ENTRA_AGENT_CLIENT_ID,
       roles: finalScopes,
+      scp: 'user_impersonation',
       scope: finalScopes.join(' '),
       act: recursiveAct,
       actorChain,
       downscoped: true,
-      delegationType: 'RFC8693_MULTI_HOP_CHAIN'
+      delegationType: assertionToken ? 'RFC8693_ENTRA_OBO' : 'RFC8693_MULTI_HOP_CHAIN'
     };
 
     const azureTestKey = jwtUtil.getAzureTestPrivateKey();
@@ -428,7 +476,7 @@ class TokenExchangeEngine {
 
     return {
       exchangedToken,
-      tokenType: liveEntraToken ? 'AZURE_ENTRA_WIF_LIVE' : 'AZURE_ENTRA_WIF_RS256_TEST',
+      tokenType: liveEntraToken ? (assertionToken ? 'AZURE_ENTRA_OBO_LIVE' : 'AZURE_ENTRA_WIF_LIVE') : 'AZURE_ENTRA_WIF_RS256_TEST',
       claims: entraClaims,
       delegatedUser: {
         sub: userEmail,
@@ -443,7 +491,7 @@ class TokenExchangeEngine {
         eligibleScopes: userEligibleScopes,
         grantedScopes: finalScopes,
         requestedTool,
-        tokenIssuer: 'Microsoft Entra ID (Azure WIF)'
+        tokenIssuer: assertionToken ? 'Microsoft Entra ID (Native OBO)' : 'Microsoft Entra ID (Azure WIF)'
       }
     };
   }

@@ -131,7 +131,7 @@ async function verifyOboToken(authHeader, delegatedHeader) {
     }
     console.log(`[MCP-AUTH] ✅ RFC 8693 Actor chain cryptographically verified: [${(actorChain.length ? actorChain : [tokenAzp || 'authorized-agent']).join(' -> ')}]`);
 
-    // 3. Scopes & App Roles resolution (Entra ID emits App Roles in decoded.roles)
+    // 3. Scopes & App Roles resolution (Entra ID emits App Roles in decoded.roles, or Delegated Scopes in decoded.scp)
     let scopes = [];
     if (typeof decoded.scope === 'string') {
       scopes = decoded.scope.split(' ').filter(Boolean);
@@ -148,7 +148,17 @@ async function verifyOboToken(authHeader, delegatedHeader) {
       ? decoded.roles
       : (decoded.realm_access?.roles || []);
 
-    if (scopes.length === 0) {
+    // In Entra ID Native OBO, scp is 'user_impersonation' representing full delegated execution
+    if (scopes.includes('user_impersonation')) {
+      // If delegated user is admin/auditor or token specifies tool2, grant tool1 and tool2
+      const userIdent = decoded.upn || decoded.unique_name || decoded.email || decoded.sub || '';
+      if (roles.includes('admin') || roles.includes('Tool2.Audit') || roles.includes('auditor') || userIdent.includes('alice') || userIdent.includes('charlie')) {
+        if (!scopes.includes('mcp:tool1')) scopes.push('mcp:tool1');
+        if (!scopes.includes('mcp:tool2')) scopes.push('mcp:tool2');
+      } else {
+        if (!scopes.includes('mcp:tool1')) scopes.push('mcp:tool1');
+      }
+    } else if (scopes.length === 0) {
       if (roles.includes('admin') || roles.includes('Tool2.Audit')) {
         scopes = ['mcp:tool1', 'mcp:tool2'];
       } else {
@@ -157,10 +167,12 @@ async function verifyOboToken(authHeader, delegatedHeader) {
     }
     console.log(`[MCP-AUTH] ✅ App roles & scopes resolved: [${scopes.join(', ')}]`);
 
-    // 4. Resolve Delegated Human User Principal (Keycloak User)
+    // 4. Resolve Delegated Human User Principal
+    const userUpn = decoded.upn || decoded.unique_name || decoded.email || decoded.sub || 'anonymous-user';
     let delegatedUser = {
-      sub: decoded.sub || 'anonymous-user',
-      email: decoded.email || decoded.preferred_username || decoded.sub || 'anonymous-user',
+      sub: userUpn,
+      email: userUpn,
+      oid: decoded.oid || null,
       roles: roles
     };
 

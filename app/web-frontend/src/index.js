@@ -105,27 +105,73 @@ app.post('/api/login', async (req, res) => {
     { expiresInSeconds: 3600 }
   );
 
-  // 2. Mint Microsoft Entra ID User Subject Token (Authentic RS256 PKI)
+  // 2. Acquire Microsoft Entra ID User Subject Token (Authentic RS256 PKI for Orchestrator Audience)
   const azureTestKey = jwtUtil.getAzureTestPrivateKey();
+  const orchestratorAudience = `api://${ENTRA_CLIENT_ID}`;
+  let liveEntraUserToken = null;
+
+  // Attempt live Entra ID ROPC acquisition if running against live Entra
+  try {
+    const postData = require('querystring').stringify({
+      grant_type: 'password',
+      client_id: ENTRA_CLIENT_ID,
+      username: user.email,
+      password: user.password === 'Password123!' ? 'Password123!Safe' : user.password,
+      scope: `${orchestratorAudience}/access_as_user openid profile`
+    });
+
+    const parsedUrl = new URL(`https://login.microsoftonline.com/${ENTRA_TENANT_ID}/oauth2/v2.0/token`);
+    const entraUserRes = await new Promise((resolve, reject) => {
+      const https = require('https');
+      const req = https.request(parsedUrl, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/x-www-form-urlencoded',
+          'Content-Length': Buffer.byteLength(postData)
+        },
+        timeout: 2500
+      }, res => {
+        let raw = '';
+        res.on('data', chunk => raw += chunk);
+        res.on('end', () => {
+          try { resolve({ statusCode: res.statusCode, body: JSON.parse(raw) }); }
+          catch { resolve({ statusCode: res.statusCode, body: raw }); }
+        });
+      });
+      req.on('error', reject);
+      req.on('timeout', () => { req.destroy(); reject(new Error('Entra user token request timed out')); });
+      req.write(postData);
+      req.end();
+    });
+
+    if (entraUserRes.statusCode === 200 && entraUserRes.body.access_token) {
+      liveEntraUserToken = entraUserRes.body.access_token;
+      console.log(`[FRONTEND-AUTH] ✅ Real Microsoft Entra ID user token acquired for ${user.email}`);
+    }
+  } catch (err) {
+    // Offline / test fallback
+  }
+
   const entraPayload = {
     iss: `https://login.microsoftonline.com/${ENTRA_TENANT_ID}/v2.0`,
     tid: ENTRA_TENANT_ID,
-    aud: ENTRA_AUDIENCE,
+    aud: orchestratorAudience,
     sub: user.email,
     upn: user.email,
+    unique_name: user.email,
     email: user.email,
     name: user.displayName,
     appid: ENTRA_CLIENT_ID,
     azp: ENTRA_CLIENT_ID,
     roles: user.roles,
-    scp: user.scopes.join(' '),
-    scope: user.scopes.join(' '),
+    scp: 'access_as_user',
+    scope: 'access_as_user',
     identityProvider: 'EntraID'
   };
 
-  const entraToken = azureTestKey
+  const entraToken = liveEntraUserToken || (azureTestKey
     ? jwtUtil.signRS256(entraPayload, azureTestKey, { kid: 'azure-test-key-1', expiresInSeconds: 3600 })
-    : jwtUtil.sign(entraPayload, JWT_SECRET, { expiresInSeconds: 3600 });
+    : jwtUtil.sign(entraPayload, JWT_SECRET, { expiresInSeconds: 3600 }));
 
   // 3. Mint Google Cloud IAM / Google STS Subject Token (RS256 PKI - Option 3 Workload Identity Pool)
   const googlePrivateKey = jwtUtil.getGoogleStsPrivateKey();
@@ -171,8 +217,9 @@ app.post('/api/login', async (req, res) => {
 
 // Proxy Chat/Prompt to Agent Orchestrator
 app.post('/api/chat', async (req, res) => {
-  const { prompt } = req.body || {};
+  const { prompt, userEntraToken, entraToken } = req.body || {};
   const token = (req.body && req.body.token) || (req.headers.authorization ? req.headers.authorization.replace(/^Bearer\s+/i, '') : null);
+  const activeEntraToken = userEntraToken || entraToken || req.headers['x-user-entra-token'] || null;
 
   if (!prompt) {
     return res.status(400).json({ error: 'Missing prompt.' });
@@ -181,6 +228,7 @@ app.post('/api/chat', async (req, res) => {
   const payload = JSON.stringify({
     prompt,
     token,
+    userEntraToken: activeEntraToken,
     context: req.body && req.body.context,
     emailConfig: req.body && req.body.emailConfig
   });
@@ -191,6 +239,9 @@ app.post('/api/chat', async (req, res) => {
 
   if (token) {
     headers['Authorization'] = `Bearer ${token}`;
+  }
+  if (activeEntraToken) {
+    headers['X-User-Entra-Token'] = activeEntraToken;
   }
 
   // If local test dispatcher injected, use it
