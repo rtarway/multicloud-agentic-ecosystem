@@ -444,35 +444,48 @@ For an in-depth evaluation of whether users should have direct Azure Service Pri
 
 ---
 
-## 8. Multi-Cloud Triple-Lock Delegation: Combined Pattern A+B
+## 8. Multi-Cloud Triple-Lock Delegation: Option 3 Workload Identity Federation & Direct Subject IAM
 
-To scale cross-cloud agentic execution securely across Microsoft Azure and Google Cloud Platform, the system implements the **Triple-Lock Security Model**:
+To scale cross-cloud agentic execution securely across Microsoft Azure and Google Cloud Platform, the system implements the **Triple-Lock Security Model** augmented by **Option 3: Project-Level Workload Identity Federation with Direct Subject IAM Grants**:
 
-```
-[Human User] 
-     │
-     ▼ (Gate 1: RFC 8693 Section 2.1 Scope Downscoping)
-[Keycloak IdP: Functional Capability Consent (mcp:bigquery:query)]
-     │
-     ▼ (Gate 2: Physical IAM Kernel Restriction)
-[Google STS: OAuth 2.0 Credential Access Boundary (CAB) Token]
-     │
-     ▼ (Gate 3: Ingress, Declarative Policy & Audit Stamping)
-[Google Cloud MCP Server: Parameter Validation + BigQuery Job Labels]
-     │
-     ▼
-[Google Cloud BigQuery: Query Executed on regional_sales table ONLY]
+```mermaid
+graph TD
+    User["Human User (Alice / Bob)"] -->|Gate 1: Keycloak Functional Consent| KC["Keycloak IdP (sub: user@email)"]
+    KC -->|User Token + SPIRE Workload SVID| Orch["Agent Orchestrator (spiffe://.../orchestrator-sa)"]
+    
+    subgraph Azure_Security["Microsoft Azure (Entra ID + Storage)"]
+        Orch -->|RFC 7523 / Client Credentials| Entra["Microsoft Entra ID STS"]
+        Entra -->|Authentic RS256 JWT| Orch
+        Orch -->|Bearer Token (RS256 PKI)| AzureMCP["Azure MCP Server"]
+        AzureMCP -->|Verify via Microsoft Public JWKS| AzureMCP
+        AzureMCP -->|Gate 3: tools.yaml FGP + 60s JIT SAS| AzureStorage["Azure Storage Account (app1 / app2)"]
+    end
+
+    subgraph GCP_Security["Google Cloud Platform (Workload Identity Pool + BigQuery)"]
+        Orch -->|RFC 8693 Token Exchange + CAB| GoogleSTS["Google Cloud STS (sts.googleapis.com)"]
+        GoogleSTS -->|Project Workload Pool: k8s-agent-pool| GoogleIAM["Google Cloud IAM Member Policy"]
+        GoogleIAM -->|Direct Subject IAM Grants| BQMembers["Alice: roles/bigquery.admin & dataViewer<br/>Bob: roles/bigquery.dataViewer"]
+        GoogleSTS -->|Downscoped RS256 Token| Orch
+        Orch -->|Bearer Token (Google STS RS256)| GCPMCP["GCP BigQuery MCP Server"]
+        GCPMCP -->|Verify via Google STS Public Key| GCPMCP
+        GCPMCP -->|Gate 3: tools.yaml FGP (No SELECT *)| BigQuery["BigQuery Datasets (analytics_data / audit_logs)"]
+    end
 ```
 
 ### Architectural Principles:
-1. **Tool-Level Consent vs. Cloud Console Access**: Users possess business consent in the IdP (`mcp:bigquery:query`), eliminating the need to provision thousands of analysts directly into Google Cloud IAM or Azure IAM.
-2. **Deterministic RFC 8693 Fail-Closed Enforcement**: If an unauthorized user (e.g. Charlie) attempts to call BigQuery, the pipeline terminates at Gate 1 with `SCOPE_ESCALATION_DENIED` before any cloud token exchange occurs.
-3. **Physical Machine Bounding (CAB)**: The Service Account (`gcp-mcp-sa`) cannot be abused as a Confused Deputy because Google STS bounds the runtime token strictly to `analytics_data.regional_sales`.
-4. **Audit Non-Repudiation (NIST SP 800-53)**: The human user `sub` is stamped onto BigQuery Query Job Labels, ensuring GCP Cloud Audit Logs record the true human origin.
-
-### 8.1 Authentic Google Cloud STS Token Exchange & Asymmetric PKI
-- **Elimination of Insecure Shared Secrets**: No tokens claiming to be Google Cloud IAM or Entra ID are ever signed using symmetric HMAC (`HS256`) shared secrets across trust boundaries.
-- **Asymmetric RS256 PKI**: Tokens presented to `gcp-mcp-server` are verified using asymmetric RFC 7515 RS256 public key verification against `certs/google-sts-cert.pem` / Google JWKS.
-- **Strict Ingress Rejection**: Any token attempting to authenticate using symmetric HMAC is rejected with HTTP 401/403.
-- **Standards Callout (RFC 8693 Section 4.1)**: While Google STS and Entra ID issue cryptographically authentic tokens with subject bindings and CAB downscoping, they do not natively emit custom recursive RFC 8693 Section 4.1 `act` claims inside the token body. Tampering with tokens post-issuance to insert `act` claims breaks IdP cryptographic signatures; therefore, authentic IdP tokens are verified as issued, and full agent lineage is preserved via SPIFFE SVID actor assertions and Cloud Audit Logging (NIST SP 800-53 AU-2/AU-3).
+1. **Option 3: Project-Level Workload Identity Pool with Direct Subject IAM Member Grants**:
+   - Avoids enterprise organization dependency (`parent = "organizations/..."`) which prevents standalone GCP projects from creating workforce pools.
+   - Configures direct member principal strings in Google Cloud IAM:
+     `principal://iam.googleapis.com/projects/834200279688/locations/global/workloadIdentityPools/k8s-agent-pool/subject/{email}`.
+   - Live verified via `gcloud projects get-iam-policy wifdemoproject-507002`: Alice and Bob appear as active IAM members directly on the project.
+2. **Authentic Entra ID & Google STS RS256 PKI (Zero Fake/Symmetric HMAC Tokens)**:
+   - **Microsoft Entra ID**: Acquired via OAuth 2.0 client credentials (`a23206e1-2dda-4854-aac7-0536d2da2c4c`) and verified by `azure-mcp-server` against Microsoft's live public JWKS (`https://login.microsoftonline.com/81f26b58-159c-4879-80a0-bab30b5b4dd3/discovery/v2.0/keys`).
+   - **Google Cloud STS**: Signed with RS256 private key and verified by `gcp-mcp-server` using Google STS RS256 public keys.
+   - **Strict Ingress Rejection**: Any token attempting to authenticate using symmetric HMAC (`HS256`) is explicitly rejected with HTTP 401/403.
+3. **Deterministic RFC 8693 Fail-Closed Enforcement (Gate 1)**:
+   - If an unauthorized user (e.g. Charlie) attempts to call BigQuery or Microsoft Graph, the pipeline terminates at Gate 1 with `SCOPE_ESCALATION_DENIED` before any cloud token exchange occurs.
+4. **Physical Machine Bounding (CAB)**:
+   - Google STS applies Credential Access Boundaries restricting the runtime token strictly to `analytics_data.regional_sales`.
+5. **Audit Non-Repudiation (NIST SP 800-53 AU-2 / AU-3)**:
+   - The human user `sub` is stamped onto BigQuery Query Job Labels, ensuring GCP Cloud Audit Logs record the true human origin.
 

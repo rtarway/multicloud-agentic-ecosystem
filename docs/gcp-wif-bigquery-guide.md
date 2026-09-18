@@ -9,39 +9,56 @@ This guide explains how the Agentic Ecosystem accesses Google Cloud Platform (GC
 
 ---
 
-## 2. Google Cloud Workload Identity Federation Architecture
+## 2. Google Cloud Workload Identity Federation Architecture (Option 3: Direct Subject IAM Grants)
 
-In standard GCP architectures, external systems often misuse exported JSON service account keys. In contrast, this solution implements:
-1. **OIDC Federation via SPIRE / Keycloak**: GCP Workload Identity Pool trusts tokens signed by the local SPIRE OIDC issuer or Keycloak IdP.
-2. **GCP STS Token Exchange (`urn:ietf:params:oauth:grant-type:token-exchange`)**:
-   - The agent exchanges an incoming OIDC token for a federated Google STS access token.
-   - The token exchange specifies `requested_token_type=urn:ietf:params:oauth:token-type:access_token`.
-3. **Downscoped Credential Access Boundaries (CAB)**:
+In standard GCP architectures, external systems often misuse exported JSON service account keys or get blocked by the requirement for Google Workspace/Cloud Identity organizations. In contrast, this solution implements **Option 3: Project-Level Workload Identity Federation with Direct Subject IAM Grants**:
+
+1. **OIDC Federation via SPIRE / Keycloak**: The project-level GCP Workload Identity Pool (`k8s-agent-pool`) trusts tokens signed by the local SPIRE OIDC issuer or Keycloak IdP (`spire-oidc-provider`).
+2. **Direct Project IAM Subject Member Bindings**:
+   - Instead of blanket service account impersonation or requiring an Organization resource, human users (Alice and Bob) are configured directly in Google Cloud IAM as active member principals:
+     - `principal://iam.googleapis.com/projects/834200279688/locations/global/workloadIdentityPools/k8s-agent-pool/subject/alice@rtarwaygmail.onmicrosoft.com`
+     - `principal://iam.googleapis.com/projects/834200279688/locations/global/workloadIdentityPools/k8s-agent-pool/subject/bob@rtarwaygmail.onmicrosoft.com`
+   - Alice holds `roles/bigquery.admin` and `roles/bigquery.dataViewer`.
+   - Bob holds `roles/bigquery.dataViewer` (blocked from admin/audit).
+   - Charlie holds zero Google Cloud IAM grants (fail-closed Gate 1).
+3. **GCP STS Token Exchange (`urn:ietf:params:oauth:grant-type:token-exchange`)**:
+   - The agent exchanges an incoming OIDC token for a federated Google STS access token with audience `//iam.googleapis.com/projects/834200279688/locations/global/workloadIdentityPools/k8s-agent-pool/providers/spire-oidc-provider`.
+4. **Downscoped Credential Access Boundaries (CAB)**:
    - Restricts the token to specific BigQuery datasets (`analytics_data` or `audit_logs`).
-   - Prevents the token from being used across unintended Google APIs (e.g. Compute Engine, Cloud Storage).
-4. **Service Account Impersonation**:
-   - The federated identity impersonates `gcp-mcp-sa@<project-id>.iam.gserviceaccount.com` which has BigQuery Data Viewer / Job User roles.
+   - Prevents the token from being used across unintended Google APIs.
+5. **Authentic RS256 PKI (No Symmetric HMAC)**:
+   - Tokens presented to `gcp-mcp-server` are verified using asymmetric RFC 7515 RS256 PKI against Google STS public keys. Insecure symmetric HMAC tokens (`HS256`) are strictly rejected.
 
 ```text
-[Agent Orchestrator]
+[Human User: Alice / Bob / Charlie]
        │
-       │ (1. RFC 8693 Token Exchange with Keycloak / SPIRE JWT)
+       │ (1. IdP OIDC Token with sub: user@email)
+       ▼
+[Agent Orchestrator: spiffe://.../orchestrator-sa]
+       │
+       │ (2. RFC 8693 Token Exchange + CAB Downscoping)
        ▼
 [Google Cloud STS: sts.googleapis.com]
+  Audience: //iam.googleapis.com/projects/834200279688/locations/global/workloadIdentityPools/k8s-agent-pool/providers/spire-oidc-provider
        │
-       │ (2. Returns Federated GCP STS Token)
+       │ (3. Evaluates Direct Subject IAM Grants on Project)
        ▼
-[Google Cloud IAM Service Account Credentials API: iamcredentials.googleapis.com]
+[Google Cloud IAM Member Policy]
+  ├── Alice: roles/bigquery.admin & roles/bigquery.dataViewer
+  ├── Bob:   roles/bigquery.dataViewer ONLY
+  └── Charlie: ZERO GRANTS (Denied at Gate 1)
        │
-       │ (3. Generates Downscoped Access Token with BigQuery Scopes)
+       │ (4. Downscoped RS256 Bearer Token)
        ▼
 [BigQuery MCP Server: port 8081]
+  - Verifies RS256 PKI Signature
+  - Enforces Declarative FGP (tools.yaml: blocks SELECT *)
        │
-       │ (4. tools/call with Bearer OBO JWT preserving sub & act chain)
+       │ (5. Authorized BigQuery API Query)
        ▼
 [Google Cloud BigQuery Engine]
-       ├── analytics_data.sales_summary
-       └── audit_logs.access_audit
+  ├── analytics_data.regional_sales (Alice & Bob: Read Allowed)
+  └── audit_logs.access_audit       (Alice: Admin Allowed | Bob: HTTP 403 Denied)
 ```
 
 ---
@@ -68,7 +85,7 @@ tools:
           allowed_values: ["analytics_data"]
         table:
           type: "string"
-          allowed_values: ["sales_summary", "regional_metrics"]
+          allowed_values: ["regional_sales"]
         query:
           type: "string"
           disallowed_patterns:
@@ -104,29 +121,48 @@ tools:
 
 ---
 
-## 4. Terraform Infrastructure Provisioning
+## 4. Terraform Infrastructure Provisioning (`terraform/gcp/`)
 
-The `terraform/gcp/` module configures the Workload Identity Pool, Provider, and Datasets:
+The `terraform/gcp/` module configures the Workload Identity Pool, Provider, BigQuery Datasets, and Direct Subject IAM Member grants:
 
 ```hcl
-# Workload Identity Pool
+# 1. Project Workload Identity Pool
 resource "google_iam_workload_identity_pool" "agent_pool" {
-  workload_identity_pool_id = "agent-orchestrator-pool"
-  display_name              = "Agent Orchestrator Workload Identity Pool"
+  workload_identity_pool_id = "k8s-agent-pool"
+  display_name              = "Agent WIF Pool"
 }
 
-# OIDC Provider bound to SPIRE / Keycloak
+# 2. OIDC Provider bound to SPIRE / Keycloak
 resource "google_iam_workload_identity_pool_provider" "spire_provider" {
   workload_identity_pool_id          = google_iam_workload_identity_pool.agent_pool.workload_identity_pool_id
   workload_identity_pool_provider_id = "spire-oidc-provider"
   attribute_mapping = {
-    "google.subject" = "assertion.sub"
-    "attribute.act"  = "assertion.act.sub"
-    "attribute.role" = "assertion.roles"
+    "google.subject"      = "assertion.sub"
+    "attribute.spiffe_id" = "assertion.sub"
+    "attribute.aud"       = "assertion.aud"
   }
   oidc {
     issuer_uri = var.oidc_issuer_url
   }
+}
+
+# 3. Direct Project IAM Subject Member Bindings for Alice & Bob
+resource "google_project_iam_member" "alice_bq_admin" {
+  project = var.gcp_project_id
+  role    = "roles/bigquery.admin"
+  member  = "principal://iam.googleapis.com/projects/${var.gcp_project_number}/locations/global/workloadIdentityPools/${var.workload_identity_pool_id}/subject/alice@rtarwaygmail.onmicrosoft.com"
+}
+
+resource "google_project_iam_member" "alice_bq_viewer" {
+  project = var.gcp_project_id
+  role    = "roles/bigquery.dataViewer"
+  member  = "principal://iam.googleapis.com/projects/${var.gcp_project_number}/locations/global/workloadIdentityPools/${var.workload_identity_pool_id}/subject/alice@rtarwaygmail.onmicrosoft.com"
+}
+
+resource "google_project_iam_member" "bob_bq_viewer" {
+  project = var.gcp_project_id
+  role    = "roles/bigquery.dataViewer"
+  member  = "principal://iam.googleapis.com/projects/${var.gcp_project_number}/locations/global/workloadIdentityPools/${var.workload_identity_pool_id}/subject/bob@rtarwaygmail.onmicrosoft.com"
 }
 ```
 

@@ -1,38 +1,39 @@
 # Multi-Cloud Agentic Ecosystem & Workload Identity Federation (WIF) POC
 ### Azure Cloud Storage &bull; Google Cloud BigQuery &bull; RFC 8693 Multi-Hop Recursive Actor Chains &bull; Low-Code Declarative MCP Server (July 2026 Spec)
 
-[![Tests](https://img.shields.io/badge/Tests-45%2F45%20Passed-brightgreen)](./scripts/test-all.sh)
+[![Tests](https://img.shields.io/badge/Tests-50%2F50%20Passed-brightgreen)](./scripts/test-all.sh)
 [![Security Standards](https://img.shields.io/badge/Compliance-NIST%20SP%20800--207%20%7C%20OWASP%20Top%2010%20%7C%20MAESTRO-blue)](./docs/multi-hop-actor-chain-guide.md)
 [![MCP Spec](https://img.shields.io/badge/MCP%20Spec-2026--07--15-orange)](./app/mcp-server/tools.yaml)
 
-This repository provides an enterprise-grade Proof-of-Concept (POC) demonstrating an **Agent Ecosystem** deployed on **Kubernetes (SPIRE + Istio)** securely accessing **Low-Code Declarative Model Context Protocol (MCP) Servers** across **Microsoft Azure (Cloud Storage)** and **Google Cloud Platform (BigQuery)**.
+This repository provides an enterprise-grade Proof-of-Concept (POC) demonstrating an **Agent Ecosystem** deployed on **Kubernetes (SPIRE + Istio)** securely accessing **Low-Code Declarative Model Context Protocol (MCP) Servers** across **Microsoft Azure (Cloud Storage & Graph API)** and **Google Cloud Platform (BigQuery)**.
 
-It proves **secret-free Workload Identity Federation (WIF)**, **RFC 8693 Section 4.1 multi-hop recursive delegation chains (`act`)**, **Fine-Grained Parameter (FGP) policies**, and **cross-cloud multi-turn agent synthesis** while strictly preserving the originating human user (`sub`) across cloud boundaries.
+It proves **secret-free Workload Identity Federation (WIF)**, **direct subject IAM grants in Google Cloud IAM without enterprise organization sprawl**, **authentic Microsoft Entra ID RS256 PKI tokens verified via public JWKS**, **RFC 8693 Section 4.1 multi-hop recursive delegation chains (`act`)**, **Fine-Grained Parameter (FGP) policies**, and **cross-cloud multi-turn agent synthesis** while strictly preserving the originating human user (`sub`) across cloud boundaries with zero fake/symmetric HMAC tokens.
 
 ---
 
 ## ⚡ Quick Start
 
-### 1. Run the Automated Verification Suite (45/45 Tests)
+### 1. Run the Automated Verification Suite (50/50 Tests)
 ```bash
 ./scripts/test-all.sh
 ```
 Runs test suites across all 4 services:
 - `app/web-frontend`: 8/8 passed
-- `app/agent-orchestrator`: 15/15 passed
-- `app/mcp-server` (Azure): 12/12 passed
-- `app/gcp-mcp-server` (GCP BigQuery): 10/10 passed
+- `app/agent-orchestrator`: 18/18 passed
+- `app/mcp-server` (Azure): 12/12 passed (tested against Entra ID RS256 PKI)
+- `app/gcp-mcp-server` (GCP BigQuery): 12/12 passed (tested against Google Cloud STS RS256 PKI)
+- `k8s manifests`: 5/5 validated
 
 ### 2. Run the CLI Multi-Cloud Demo
 ```bash
 ./scripts/run-demo.sh
 ```
-Executes 7 end-to-end scenarios (A through G) showcasing:
+Executes end-to-end scenarios showcasing:
 - **Scenario A**: Alice (Admin) calling Azure MCP Tool 1 (`mcp:tool1` -> `app1` allowed)
 - **Scenario B**: Bob (Regular User) calling Azure MCP Tool 1 (`mcp:tool1` -> `app2` allowed)
 - **Scenario C**: Bob attempting Azure MCP Tool 2 (Rejected with native MCP `{ isError: true }`)
-- **Scenario D**: Alice executing GCP BigQuery Sales Query (`analytics_data.sales_summary`)
-- **Scenario E**: Bob blocked from GCP BigQuery Audit Compliance (Role mismatch)
+- **Scenario D**: Alice executing GCP BigQuery Sales Query (`analytics_data.regional_sales`) via direct IAM grant
+- **Scenario E**: Bob blocked from GCP BigQuery Audit Compliance (Role & scope mismatch)
 - **Scenario F**: Fine-Grained Parameter (FGP) Wildcard Blocking (`SELECT *` rejected)
 - **Scenario G**: Multi-Hop Cross-Cloud Pipeline: Turn 1 (Azure Storage) &rarr; Turn 2 (GCP BigQuery with recursive `act` chain) &rarr; Turn 3 (Cross-cloud synthesis & PII masking)
 
@@ -117,7 +118,7 @@ multicloud-agentic-ecosystem/
 │   │   ├── src/tokenExchange.js        # RFC 8693 Google/Azure STS & Recursive Actor Chains
 │   │   ├── src/opaPolicy.js            # OPA authorization & fine-grained tool policies
 │   │   ├── src/spireClient.js          # SPIRE Workload API client
-│   │   ├── test/orchestrator.test.js   # Automated tests (15/15 passed)
+│   │   ├── test/orchestrator.test.js   # Automated tests (18/18 passed)
 │   │   └── Dockerfile
 │   ├── mcp-server/                     # Azure Cloud Storage Declarative MCP Server
 │   │   ├── tools.yaml                  # Declarative tool registry (July 2026 Spec: 2026-07-15)
@@ -133,11 +134,11 @@ multicloud-agentic-ecosystem/
 │       ├── src/auth.js                 # Recursive act & GCP STS validation
 │       ├── src/declarativeEngine.js    # FGP wildcard SQL blocking & parameter validation
 │       ├── src/bigqueryClient.js       # BigQuery client wrapper
-│       ├── test/gcp-mcp.test.js        # Automated tests (10/10 passed)
+│       ├── test/gcp-mcp.test.js        # Automated tests (12/12 passed)
 │       └── Dockerfile
 ├── terraform/                          # Infrastructure provisioning
 │   ├── gcp/                            # Google Cloud Workload Identity Federation & BigQuery
-│   │   ├── main.tf                     # Workload Identity Pool, Provider, Datasets
+│   │   ├── main.tf                     # Workload Identity Pool, Provider, Datasets, Direct Project IAM Grants
 │   │   ├── variables.tf
 │   │   └── outputs.tf
 │   ├── spire.tf                        # SPIRE CRDs, Server, Agent, SPIFFE CSI Driver
@@ -149,7 +150,7 @@ multicloud-agentic-ecosystem/
 │   ├── agent-orchestrator-deployment.yaml
 │   └── web-frontend-deployment.yaml
 ├── scripts/                            # Automation & Verification
-│   ├── test-all.sh                     # Unified test suite (45/45 tests)
+│   ├── test-all.sh                     # Unified test suite (50/50 tests)
 │   └── run-demo.sh                     # CLI Demo runner (Scenarios A through G)
 └── docs/                               # Architecture and Guides
     ├── multi-hop-actor-chain-guide.md  # RFC 8693 §4.1, NIST SP 800-207, MAESTRO, OWASP Guide

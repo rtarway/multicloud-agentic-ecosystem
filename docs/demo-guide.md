@@ -75,11 +75,13 @@ http://localhost:3000
 
 ---
 
-## 🧪 Option 3: Run Full Automated Verification Suite
+## 🧪 Run Full Automated Verification Suite (50/50 Tests)
 ```bash
 ./scripts/test-all.sh
 ```
-Executes all 17 automated tests across:
-- `mcp-server` (Protocol version 2026-07-15, declarative engine, tool1, tool2, scope authorization)
-- `agent-orchestrator` (LLM simulation, SPIRE workload API, RFC 8693 token exchange)
-- `web-frontend` (Direct browser routing, Keycloak proxying)
+Executes all 50 automated tests across:
+- `mcp-server` (Protocol version 2026-07-15, declarative engine, tool1, tool2, Entra ID RS256 PKI against public JWKS)
+- `gcp-mcp-server` (BigQuery sales and audit tools, declarative engine, Google STS RS256 PKI, FGP wildcard blocking)
+- `agent-orchestrator` (Multi-cloud LLM planning, SPIRE workload API, RFC 8693 recursive actor chains, Gate 1 scope enforcement)
+- `web-frontend` (Direct browser routing, Keycloak proxying, token inspector)
+- `k8s manifests` (Syntax validation for orchestrator, MCP servers, and frontend deployments)

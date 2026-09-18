@@ -112,13 +112,15 @@ graph TD
 - **Flow**: The agent presents the exchanged OIDC token to AWS STS. AWS validates the signature against Keycloak/SPIRE's OIDC discovery endpoint and returns temporary AWS credentials (`AccessKeyId`, `SecretAccessKey`, `SessionToken`).
 - **Audit**: AWS CloudTrail records the federated identity session with the user principal and agent actor.
 
-### 3.2 GCP Integration
-- **Mechanism**: GCP Workload Identity Federation via **GCP STS (`sts.googleapis.com`)**.
-- **Flow**: GCP STS natively implements RFC 8693! The agent calls `https://sts.googleapis.com/v1/token` with `grant_type=urn:ietf:params:oauth:grant-type:token-exchange` and `subject_token=<OIDC_Token>`. GCP exchanges it for a federated GCP token to access Google Cloud Storage, BigQuery, etc.
+### 3.2 GCP Integration (Option 3: Workload Identity Federation Direct Subject Grants)
+- **Mechanism**: GCP Workload Identity Federation via **GCP STS (`sts.googleapis.com`)** combined with **Direct Project IAM Subject Member Bindings**.
+- **Flow**: GCP STS natively implements RFC 8693! The agent calls `https://sts.googleapis.com/v1/token` with `grant_type=urn:ietf:params:oauth:grant-type:token-exchange` and `audience=//iam.googleapis.com/projects/{project_number}/locations/global/workloadIdentityPools/{pool_id}/providers/{provider_id}`. 
+- **Direct IAM Grants**: Rather than requiring an Organization resource or blanket service account impersonation, human users (Alice and Bob) are configured directly in Google Cloud project IAM policies as active member principals (`principal://iam.googleapis.com/.../workloadIdentityPools/k8s-agent-pool/subject/{email}`).
+- **Downscoped CAB**: Google STS applies Credential Access Boundaries to downscope permissions strictly to `analytics_data.regional_sales`.
 
-### 3.3 Azure Integration
-- **Mechanism**: Azure Entra ID Workload Identity Federation (WIF).
-- **Flow**: Azure App Service / AKS validates the federated token against Keycloak/SPIRE, issuing Azure Resource Manager tokens for Storage, Key Vault, or Azure OpenAI.
+### 3.3 Azure Integration (Authentic Entra ID RS256 PKI)
+- **Mechanism**: Microsoft Entra ID Token Exchange & Workload Identity Federation (WIF).
+- **Flow**: Authentic RS256 tokens are acquired from Microsoft Entra ID (`https://login.microsoftonline.com/{tenant_id}/oauth2/v2.0/token`) and verified at the MCP server against Microsoft's public JWKS endpoint. Symmetrical HMAC tokens are strictly rejected.
 
 ### 3.4 Anthropic Claude Integration
 Anthropic's direct public API (`https://api.anthropic.com/v1/messages`) authenticates via static API keys (`x-api-key`), not OAuth OIDC. In an enterprise setting, you have two recommended best practice options:

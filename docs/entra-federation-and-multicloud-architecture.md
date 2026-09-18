@@ -145,9 +145,9 @@ flowchart TD
     end
 
     subgraph GCP["Google Cloud Platform"]
-        GCPWIF["GCP Workforce & Workload STS"]
+        GCPWIF["GCP Workload Identity Pool (k8s-agent-pool) & STS"]
         GCPMCP["GCP MCP Server (Cloud Run / GKE)"]
-        GCPRes["Cloud Storage / BigQuery"]
+        GCPRes["BigQuery (analytics_data / audit_logs)"]
         GCPWIF --> GCPMCP --> GCPRes
     end
 
@@ -162,7 +162,7 @@ flowchart TD
     CloudGateways --> GCPWIF
     CloudGateways --> AWSSSO
 
-    Agent -->|Azure Entra OBO Token| AzureMCP
+    Agent -->|Azure Entra RS256 Token| AzureMCP
     Agent -->|GCP STS RFC 8693 Token| GCPMCP
     Agent -->|AWS SigV4 Tagged Session| AWSMCP
 ```
@@ -171,10 +171,10 @@ flowchart TD
 
 | Capability | Azure Implementation | GCP Implementation | AWS Implementation |
 | :--- | :--- | :--- | :--- |
-| **Workforce Federation** | **Entra B2B Direct Federation** (SAML/OIDC) | **GCP Workforce Identity Federation** | **AWS IAM Identity Center** |
-| **Workload Federation** | **Azure WIF (RFC 7523)** | **GCP Workload Identity Federation** | **AWS IAM Roles Anywhere / STS** |
-| **Delegated User Exchange** | Entra ID OBO Grant (`grant_type=jwt-bearer`) | GCP STS Token Exchange (RFC 8693) | AWS STS `AssumeRole` with Session Tags |
-| **Data Plane IAM** | Azure Storage / Graph RBAC | Cloud Storage / BigQuery IAM Conditions | S3 Bucket Policy / DynamoDB IAM |
+| **Workforce / User Federation** | **Entra B2B Direct Federation** (SAML/OIDC) | **Option 3: Project Workload Pool Direct Subject IAM Grants** | **AWS IAM Identity Center** |
+| **Workload Federation** | **Azure WIF (RFC 7523)** | **GCP Workload Identity Federation (k8s-agent-pool)** | **AWS IAM Roles Anywhere / STS** |
+| **Delegated User Exchange** | Entra ID Client Credentials / WIF (RS256 PKI) | GCP STS Token Exchange (RFC 8693 + CAB) | AWS STS `AssumeRole` with Session Tags |
+| **Data Plane IAM** | Azure Storage / Graph RBAC | BigQuery Project IAM Member Grants (`principal://.../subject/{email}`) | S3 Bucket Policy / DynamoDB IAM |
 | **Tool Governance** | Declarative MCP (`tools.yaml`) | Declarative MCP (`tools.yaml`) | Declarative MCP (`tools.yaml`) |
 
 ---
