@@ -37,11 +37,16 @@ function invokeApp(appInstance, { method = 'POST', url = '/mcp', headers = {}, b
     req.method = method;
     req.url = url;
 
+    const normalizedHeaders = {};
+    for (const [k, v] of Object.entries(headers)) {
+      normalizedHeaders[k.toLowerCase()] = v;
+    }
+
     const data = body ? (typeof body === 'string' ? body : JSON.stringify(body)) : '';
     req.headers = {
       'content-type': 'application/json',
       'content-length': Buffer.byteLength(data).toString(),
-      ...headers
+      ...normalizedHeaders
     };
 
     let responseData = '';
@@ -50,13 +55,14 @@ function invokeApp(appInstance, { method = 'POST', url = '/mcp', headers = {}, b
     res._headers = {};
     res.setHeader = (k, v) => { res._headers[k.toLowerCase()] = v; };
     res.getHeader = (k) => res._headers[k.toLowerCase()];
+    res.removeHeader = (k) => { delete res._headers[k.toLowerCase()]; };
+    res.writeHead = (code, h = {}) => {
+      res.statusCode = code;
+      Object.assign(res._headers, h);
+    };
     res._write = (chunk, enc, cb) => {
       responseData += chunk.toString();
       cb();
-    };
-    res.writeHead = (code, headers = {}) => {
-      res.statusCode = code;
-      Object.assign(res._headers, headers);
     };
     res.end = (chunk) => {
       if (chunk) responseData += chunk.toString();

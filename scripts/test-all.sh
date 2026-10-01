@@ -13,21 +13,23 @@ echo " Running Automated Verification Suite for Multi-Cloud Ecosystem"
 echo " (Azure WIF + GCP BigQuery WIF + RFC 8693 Multi-Hop Chains)"
 echo "================================================================="
 
+NODE_BIN="$(command -v /usr/local/bin/node || command -v node)"
+
 echo "--> 1. Testing Azure Low-Code Declarative MCP Server (Spec 2026-07-15)..."
 cd "${ROOT_DIR}/app/mcp-server"
-node --test test/*.test.js
+"$NODE_BIN" --test test/*.test.js
 
 echo "--> 2. Testing GCP BigQuery Declarative MCP Server (Spec 2026-07-15)..."
 cd "${ROOT_DIR}/app/gcp-mcp-server"
-node --test test/*.test.js
+"$NODE_BIN" --test test/*.test.js
 
 echo "--> 3. Testing Multi-Cloud Agent Orchestrator & RFC 8693 Token Exchange..."
 cd "${ROOT_DIR}/app/agent-orchestrator"
-node --test test/*.test.js
+"$NODE_BIN" --test test/*.test.js
 
 echo "--> 4. Testing Web Frontend Dashboard (Outside SPIRE)..."
 cd "${ROOT_DIR}/app/web-frontend"
-node --test test/*.test.js
+"$NODE_BIN" --test test/*.test.js
 
 echo "--> 5. Validating Kubernetes Manifests..."
 for f in "${ROOT_DIR}"/k8s/*.yaml; do

@@ -52,41 +52,75 @@ Access points:
 
 ## 🎯 Architectural Overview
 
-```text
-[Browser User] 
-       │ (1. Keycloak OIDC Login)
-       ▼
-[Keycloak IdP] ──> Bearer JWT (Alice: admin / Bob: regular-user)
-       │ 
-       ▼
-[Web Frontend (Outside SPIRE)] ──> Direct Browser HTTP
-       │ 
-       ▼ (2. Prompt + Keycloak JWT)
-[Agent Orchestrator (Inside SPIRE + Istio)]
-       │ ──> (3. Fetch Workload SVID: spiffe://example.org/ns/agent-system/sa/orchestrator-sa)
-       │ ──> (4. Turn 1: LLM Reasoning & RFC 8693 Token Exchange for Azure)
-       ▼
-[Azure Storage MCP Server: port 8080]
-       │ ──> Validates scope 'mcp:tool1', executes Azure Storage JIT read
-       ▼
-[Agent Orchestrator]
-       │ ──> (5. Turn 2: Multi-Hop RFC 8693 Token Exchange with Recursive 'act' Chain)
-       ▼
-[GCP BigQuery MCP Server: port 8081]
-       │ ──> Verifies sub=alice, act.sub=orchestrator, act.act.sub=llm, act.act.act.sub=azure-mcp
-       │ ──> Enforces FGP policy (blocks SELECT *), queries analytics_data
-       ▼
-[Agent Orchestrator]
-       │ ──> (6. Turn 3: Cross-Cloud Synthesis & PII Redaction)
-       ▼
-[Web Frontend / User] (Unified secure response)
+### Multi-Cloud Cross-Cloud Delegation Flow
+```mermaid
+sequenceDiagram
+    autonumber
+    actor Alice as Human User (alice@rtarwaygmail.onmicrosoft.com)
+    participant Web as Web Frontend (Browser UI)
+    participant Orch as Agent Orchestrator (K8s / SPIRE)
+    participant Entra as Microsoft Entra ID STS
+    participant AzMCP as Azure Storage MCP Server
+    participant GoogleSTS as Google Cloud STS (WIF Pool)
+    participant GcpMCP as GCP BigQuery MCP Server
+
+    Alice->>Web: 1. Authenticate (SSO / 1-Click Login)
+    Web->>Entra: 2. Request user token (aud: api://k8s-agent-orchestrator)
+    Entra-->>Web: 3. Authentic Entra ID User Token (scp: access_as_user, sub/oid: Alice)
+    Web->>Orch: 4. Dispatch Prompt + User Entra Token (X-User-Entra-Token)
+    
+    rect rgb(240, 248, 255)
+        Note over Orch,AzMCP: Turn 1: Azure Cloud Storage Access (Native Entra ID OBO)
+        Orch->>Entra: 5. Native OBO Token Exchange (grant_type=jwt-bearer, requested_token_use=on_behalf_of)
+        Entra-->>Orch: 6. Authentic RS256 OBO Token (aud: api://azure-mcp-server, scp: user_impersonation, oid: Alice)
+        Orch->>AzMCP: 7. Call tool1 (Authorization: Bearer <OBO_Token>)
+        AzMCP->>AzMCP: 8. Verify signature with Microsoft public JWKS & evaluate Alice RBAC
+        AzMCP-->>Orch: 9. Return financial report data (/app1/financial-report.json)
+    end
+
+    rect rgb(255, 245, 245)
+        Note over Orch,GcpMCP: Turn 2: Google Cloud BigQuery Access (Option 3 Workload Identity Federation)
+        Orch->>GoogleSTS: 10. STS Token Exchange with Credential Access Boundary (CAB) + recursive 'act' chain
+        GoogleSTS-->>Orch: 11. Downscoped RS256 token (aud: k8s-agent-pool/providers/spire-oidc-provider)
+        Orch->>GcpMCP: 12. Query BigQuery sales (Authorization: Bearer <GCP_STS_Token>)
+        GcpMCP->>GcpMCP: 13. Verify direct IAM grant (principal://.../subject/alice@rtarwaygmail.onmicrosoft.com)
+        GcpMCP-->>Orch: 14. Return regional sales data (analytics_data.regional_sales)
+    end
+
+    rect rgb(245, 255, 245)
+        Note over Orch,Alice: Turn 3: LLM Cross-Cloud Synthesis & Executive Response
+        Orch->>Orch: 15. In-memory reconciliation, PII scrubbing & cross-cloud summary
+        Orch-->>Web: 16. Return unified response with complete multi-hop audit provenance
+        Web-->>Alice: 17. Display reconciled financial audit report
+    end
 ```
 
-### RFC 8693 §4.1 Recursive Delegation Claim
+### 1. Microsoft Entra ID Native OBO Delegated Token (Turn 1 -> Azure MCP)
 ```json
 {
-  "sub": "alice@example.com",
+  "aud": "api://d5850aa0-a667-41c3-8dd0-16f2dee4da25",
+  "iss": "https://sts.windows.net/81f26b58-159c-4879-80a0-bab30b5b4dd3/",
+  "sub": "1Gb5kjxZoWHFZg_kF96ChAANCZF7CtHh0LZPJ-pjhrw",
+  "oid": "f0717748-78aa-43ae-a396-56df193e50ea",
+  "upn": "alice@rtarwaygmail.onmicrosoft.com",
+  "appid": "a23206e1-2dda-4854-aac7-0536d2da2c4c",
+  "scp": "user_impersonation"
+}
+```
+
+### 2. Google Cloud WIF & RFC 8693 §4.1 Recursive Delegation Claim (Turn 2 -> GCP MCP)
+```json
+{
+  "iss": "https://sts.googleapis.com",
+  "aud": "//iam.googleapis.com/projects/834200279688/locations/global/workloadIdentityPools/k8s-agent-pool/providers/spire-oidc-provider",
+  "sub": "alice@rtarwaygmail.onmicrosoft.com",
   "scope": "mcp:bigquery:query",
+  "google_cloud_iam": {
+    "projectId": "wifdemoproject-507002",
+    "projectNumber": "834200279688",
+    "poolId": "k8s-agent-pool",
+    "principal": "principal://iam.googleapis.com/projects/834200279688/locations/global/workloadIdentityPools/k8s-agent-pool/subject/alice@rtarwaygmail.onmicrosoft.com"
+  },
   "act": {
     "sub": "spiffe://example.org/ns/agent-system/sa/orchestrator-sa",
     "act": {
@@ -166,6 +200,7 @@ multicloud-agentic-ecosystem/
 ## 📚 Documentation Links
 
 * 🔗 **[Multi-Hop Actor Delegation & Provenance Architecture Guide](./docs/multi-hop-actor-chain-guide.md)**: Deep dive into RFC 8693 §4.1 recursive actor chains, NIST SP 800-207 Zero Trust, OWASP Top 10 for Agentic AI, and MAESTRO framework.
+* 🌐 **[B2B Identity Federation & Native Entra OBO Architecture Guide](./docs/b2b-identity-federation-prerequisites-guide.md)**: Detailed breakdown of Path A (Native Entra ID OBO Token Exchange) and Path B (Enterprise B2B Direct Federation Roadmap).
 * ☁️ **[Google Cloud Workload Identity Federation & BigQuery MCP Guide](./docs/gcp-wif-bigquery-guide.md)**: Google STS token exchange, Credential Access Boundaries, and declarative BigQuery querying.
 * ☁️ **[Azure Setup & Workload Identity Federation (WIF) Guide](./docs/azure-setup-guide.md)**: Provisioning Azure resources, Entra ID Federated Credentials, and Storage Accounts.
 * 🏛️ **[Complete Architecture & Security Deep Dive](./docs/architecture.md)**: Comprehensive architectural reference.
