@@ -27,3 +27,15 @@ variable "azure_storage_account_name" {
   description = "Azure Storage Account Name"
   default     = "azwifstoragepoc"
 }
+
+variable "keycloak_admin_user" {
+  type        = string
+  description = "Keycloak bootstrap admin username"
+  default     = "kcadmin"
+}
+
+variable "keycloak_admin_password" {
+  type        = string
+  description = "Keycloak bootstrap admin password. Set TF_VAR_keycloak_admin_password; there is deliberately no default."
+  sensitive   = true
+}

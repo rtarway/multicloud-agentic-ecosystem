@@ -184,7 +184,10 @@ multicloud-agentic-ecosystem/
 │       ├── src/bigqueryClient.js       # BigQuery client wrapper
 │       ├── test/gcp-mcp.test.js        # Automated tests (12/12 passed)
 │       └── Dockerfile
+├── identity/                           # POC identity seed (users.yaml = single source; map, lib, tests)
+├── shared/                             # Canonical vendored helpers (simulation guard, demo keys, redaction, identity mapping)
 ├── terraform/                          # Infrastructure provisioning
+│   ├── identity/                       # Keycloak / Entra / Google identity seed roots (from identity/users.yaml)
 │   ├── gcp/                            # Google Cloud Workload Identity Federation & BigQuery
 │   │   ├── main.tf                     # Workload Identity Pool, Provider, Datasets, Direct Project IAM Grants
 │   │   ├── variables.tf

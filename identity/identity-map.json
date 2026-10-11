@@ -1,0 +1,110 @@
+{
+  "version": 1,
+  "realm": "azure-wif-realm",
+  "users": [
+    {
+      "id": "alice",
+      "display_name": "Alice (multi-cloud admin)",
+      "enabled": true,
+      "emails": {
+        "keycloak": "alice@rtarwaygmail.onmicrosoft.com",
+        "entra_upn": "alice@rtarwaygmail.onmicrosoft.com",
+        "google": "alice.poc@example.com"
+      },
+      "groups": [
+        "agent-bigquery-audit",
+        "agent-bigquery-query",
+        "agent-mail-send",
+        "agent-tool1",
+        "agent-tool2",
+        "azure-app1-readers",
+        "azure-app2-readers",
+        "bigquery-analytics-viewers",
+        "bigquery-audit-viewers"
+      ]
+    },
+    {
+      "id": "bob",
+      "display_name": "Bob (analyst)",
+      "enabled": true,
+      "emails": {
+        "keycloak": "bob@rtarwaygmail.onmicrosoft.com",
+        "entra_upn": "bob@rtarwaygmail.onmicrosoft.com",
+        "google": "bob.poc@example.com"
+      },
+      "groups": [
+        "agent-bigquery-query",
+        "agent-tool1",
+        "azure-app2-contributors",
+        "bigquery-analytics-viewers"
+      ]
+    },
+    {
+      "id": "charlie",
+      "display_name": "Charlie (Azure-only auditor)",
+      "enabled": true,
+      "emails": {
+        "keycloak": "charlie@rtarwaygmail.onmicrosoft.com",
+        "entra_upn": "charlie@rtarwaygmail.onmicrosoft.com"
+      },
+      "groups": [
+        "agent-tool1",
+        "agent-tool2",
+        "azure-app1-readers",
+        "azure-app2-readers"
+      ]
+    }
+  ],
+  "groups": [
+    {
+      "id": "agent-bigquery-audit",
+      "agent_scopes": [
+        "mcp:bigquery:audit"
+      ]
+    },
+    {
+      "id": "agent-bigquery-query",
+      "agent_scopes": [
+        "mcp:bigquery:query"
+      ]
+    },
+    {
+      "id": "agent-mail-send",
+      "agent_scopes": [
+        "Mail.Send"
+      ]
+    },
+    {
+      "id": "agent-tool1",
+      "agent_scopes": [
+        "mcp:tool1"
+      ]
+    },
+    {
+      "id": "agent-tool2",
+      "agent_scopes": [
+        "mcp:tool2"
+      ]
+    },
+    {
+      "id": "azure-app1-readers",
+      "agent_scopes": []
+    },
+    {
+      "id": "azure-app2-contributors",
+      "agent_scopes": []
+    },
+    {
+      "id": "azure-app2-readers",
+      "agent_scopes": []
+    },
+    {
+      "id": "bigquery-analytics-viewers",
+      "agent_scopes": []
+    },
+    {
+      "id": "bigquery-audit-viewers",
+      "agent_scopes": []
+    }
+  ]
+}

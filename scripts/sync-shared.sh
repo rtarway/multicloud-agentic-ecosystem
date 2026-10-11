@@ -14,6 +14,7 @@ declare -A TARGETS=(
   [simulation.js]="agent-orchestrator gcp-mcp-server mcp-server web-frontend"
   [demoKeys.js]="agent-orchestrator gcp-mcp-server mcp-server web-frontend"
   [redact.js]="agent-orchestrator web-frontend"
+  [identityMapping.js]="agent-orchestrator gcp-mcp-server mcp-server"
 )
 
 status=0

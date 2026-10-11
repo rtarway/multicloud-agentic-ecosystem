@@ -10,8 +10,12 @@ const querystring = require('querystring');
 
 const KEYCLOAK_HOST = process.env.KEYCLOAK_HOST || 'keycloak-service.keycloak.svc.cluster.local';
 const KEYCLOAK_PORT = parseInt(process.env.KEYCLOAK_PORT || '8080', 10);
-const ADMIN_USER = process.env.KEYCLOAK_ADMIN || 'admin';
-const ADMIN_PASS = process.env.KEYCLOAK_ADMIN_PASSWORD || 'admin';
+const ADMIN_USER = process.env.KEYCLOAK_ADMIN || process.env.KEYCLOAK_ADMIN_USER;
+const ADMIN_PASS = process.env.KEYCLOAK_ADMIN_PASSWORD;
+if (!ADMIN_USER || !ADMIN_PASS) {
+  console.error('Set KEYCLOAK_ADMIN (or KEYCLOAK_ADMIN_USER) and KEYCLOAK_ADMIN_PASSWORD; there are no default credentials.');
+  process.exit(1);
+}
 
 function req(path, method = 'GET', body = null, headers = {}) {
   return new Promise((resolve, reject) => {

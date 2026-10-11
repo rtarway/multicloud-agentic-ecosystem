@@ -448,6 +448,7 @@ test('GCP BigQuery MCP Server Test Suite (Spec 2026-07-15 & RFC 8693 Multi-Hop)'
       req.write = chunk => { sent = JSON.parse(chunk); };
       req.end = () => {
         const res = new EventEmitter();
+        res.statusCode = 200;
         callback(res);
         res.emit('data', JSON.stringify({ rows: [], jobReference: { jobId: 'job1' }, totalBytesProcessed: '0' }));
         res.emit('end');

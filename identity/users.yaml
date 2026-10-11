@@ -1,0 +1,111 @@
+# Single source of truth for the POC identity seed.
+#
+# In a real enterprise the same users, groups and role assignments are synced from the enterprise IdP into
+# Keycloak/IdP, Microsoft Entra ID and Google Cloud Identity by processes this project does not own. On a
+# local POC there is no such sync, so Terraform (terraform/identity/*) reads this file and provisions the
+# same people into all three systems. Nothing in this file is a secret: passwords are never stored here.
+#
+# Edit this file, then:   node scripts/identity-build-map.js     (regenerates identity/identity-map.json)
+#                         terraform -chdir=terraform/identity/<keycloak|entra|google> apply
+#
+# Fields
+#   users[].id                    stable logical id (Keycloak username)
+#   users[].enabled               false = deprovisioned (accounts disabled, cloud grants removed on next apply)
+#   users[].emails.keycloak       email in the IdP token ("email" claim, must be email_verified)
+#   users[].emails.entra_upn      Entra user principal name (must be in your tenant's verified/default domain)
+#   users[].emails.google         a real Google account (Terraform cannot create Google accounts; see
+#                                 docs/poc-setup-guide.md). Required for users whose groups grant Google access.
+#   users[].groups[]              group ids below
+#   groups[].agent_scopes         scopes (Keycloak optional client scopes) members may consent to for the agent
+#   groups[].azure_roles[]        Azure RBAC role on a storage container, assigned to the Entra GROUP
+#   groups[].bigquery[]           dataset-scoped BigQuery role, bound to members' Google accounts
+
+version: 1
+
+# Replace the placeholder domains/accounts with your own before applying.
+settings:
+  keycloak_realm: azure-wif-realm
+  entra_default_domain: rtarwaygmail.onmicrosoft.com
+
+groups:
+  - id: agent-tool1
+    description: May consent to the agent using Azure storage tool1
+    agent_scopes: ["mcp:tool1"]
+  - id: agent-tool2
+    description: May consent to the agent using Azure storage tool2 (audit)
+    agent_scopes: ["mcp:tool2"]
+  - id: agent-bigquery-query
+    description: May consent to the agent running BigQuery sales queries
+    agent_scopes: ["mcp:bigquery:query"]
+  - id: agent-bigquery-audit
+    description: May consent to the agent reading BigQuery audit logs
+    agent_scopes: ["mcp:bigquery:audit"]
+  - id: agent-mail-send
+    description: May consent to the agent sending mail through Microsoft Graph
+    agent_scopes: ["Mail.Send"]
+
+  - id: azure-app1-readers
+    description: Read access to storage container app1
+    azure_roles:
+      - { container: app1, role: "Storage Blob Data Reader" }
+  - id: azure-app2-readers
+    description: Read access to storage container app2
+    azure_roles:
+      - { container: app2, role: "Storage Blob Data Reader" }
+  - id: azure-app2-contributors
+    description: Read/write access to storage container app2
+    azure_roles:
+      - { container: app2, role: "Storage Blob Data Contributor" }
+
+  - id: bigquery-analytics-viewers
+    description: Read access to the analytics_data dataset
+    bigquery:
+      - { dataset: analytics_data, role: "roles/bigquery.dataViewer" }
+  - id: bigquery-audit-viewers
+    description: Read access to the audit_logs dataset
+    bigquery:
+      - { dataset: audit_logs, role: "roles/bigquery.dataViewer" }
+
+users:
+  - id: alice
+    display_name: Alice (multi-cloud admin)
+    enabled: true
+    emails:
+      keycloak: alice@rtarwaygmail.onmicrosoft.com
+      entra_upn: alice@rtarwaygmail.onmicrosoft.com
+      google: alice.poc@example.com        # REPLACE with Alice's real Google account
+    groups:
+      - agent-tool1
+      - agent-tool2
+      - agent-bigquery-query
+      - agent-bigquery-audit
+      - agent-mail-send
+      - azure-app1-readers
+      - azure-app2-readers
+      - bigquery-analytics-viewers
+      - bigquery-audit-viewers
+
+  - id: bob
+    display_name: Bob (analyst)
+    enabled: true
+    emails:
+      keycloak: bob@rtarwaygmail.onmicrosoft.com
+      entra_upn: bob@rtarwaygmail.onmicrosoft.com
+      google: bob.poc@example.com          # REPLACE with Bob's real Google account
+    groups:
+      - agent-tool1
+      - agent-bigquery-query
+      - azure-app2-contributors
+      - bigquery-analytics-viewers
+
+  - id: charlie
+    display_name: Charlie (Azure-only auditor)
+    enabled: true
+    emails:
+      keycloak: charlie@rtarwaygmail.onmicrosoft.com
+      entra_upn: charlie@rtarwaygmail.onmicrosoft.com
+    groups:
+      - agent-tool1
+      - agent-tool2
+      - azure-app1-readers
+      - azure-app2-readers

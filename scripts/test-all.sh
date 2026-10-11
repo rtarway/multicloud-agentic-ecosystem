@@ -19,6 +19,14 @@ echo "--> 0. Verifying shared helpers are in sync and no secrets are committed..
 "${ROOT_DIR}/scripts/sync-shared.sh" --check
 "${ROOT_DIR}/scripts/check-no-secrets.sh"
 
+echo "--> 0b. Testing the identity seed (users.yaml, mapping, consistency, offboarding)..."
+"$NODE_BIN" "${ROOT_DIR}/scripts/identity-build-map.js" --check
+"$NODE_BIN" "${ROOT_DIR}/scripts/identity-check.js"
+"$NODE_BIN" --test "${ROOT_DIR}"/identity/test/*.test.js
+if command -v terraform >/dev/null 2>&1; then
+  terraform fmt -check -recursive "${ROOT_DIR}/terraform/identity"
+fi
+
 echo "--> 1. Testing Azure Low-Code Declarative MCP Server (Spec 2026-07-15)..."
 cd "${ROOT_DIR}/app/mcp-server"
 "$NODE_BIN" --test test/*.test.js
@@ -38,6 +46,11 @@ cd "${ROOT_DIR}/app/web-frontend"
 echo "--> 5. Validating Kubernetes Manifests..."
 for f in "${ROOT_DIR}"/k8s/*.yaml; do
   echo "    Checking syntax: $(basename "$f")"
+  "$NODE_BIN" -e "
+    const yaml = require(require.resolve('js-yaml', { paths: ['${ROOT_DIR}/app/mcp-server'] }));
+    const docs = yaml.loadAll(require('fs').readFileSync(process.argv[1], 'utf8')).filter(Boolean);
+    if (docs.length === 0) { console.error('no YAML documents'); process.exit(1); }
+  " "$f"
 done
 
 echo "================================================================="

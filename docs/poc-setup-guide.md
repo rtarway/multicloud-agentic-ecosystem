@@ -37,8 +37,8 @@ Google allows `http://localhost` redirect URIs for web clients, which is useful 
 
 1. Start Rancher Desktop with Kubernetes enabled; confirm `kubectl config current-context` is `rancher-desktop`.
 2. Run `./scripts/install-infra.sh` (SPIRE, Istio, Keycloak, workloads).
-3. Port-forward Keycloak: `kubectl -n keycloak port-forward svc/keycloak 8080:8080` (check the actual namespace and service name in `terraform/keycloak.tf`).
-4. Sign in to the Keycloak admin console and change the admin password. The Terraform default is `admin/admin`, which is acceptable for a disposable local POC only.
+3. Port-forward Keycloak: `kubectl -n keycloak port-forward svc/keycloak-service 8080:8080`.
+4. Load the Keycloak admin credentials. `install-infra.sh` generates them once into the git-ignored `.env.keycloak` (user `kcadmin`, random password); there is no default password. `source .env.keycloak` before running Terraform or the Keycloak scripts. Rotate the password in the admin console if you share the machine.
 
 **Planned change (decision D2 in the plan):** Keycloak 24.0.4 uses the legacy token-exchange preview. Phase 2 recommends 26.2 or later. Do not tune the exchange settings by hand until that is decided.
 
@@ -112,7 +112,7 @@ Terraform (Phase 4) grants the GCP MCP's service account encrypt/decrypt on this
 
 ### 4.5 BigQuery access for the test users
 - Their Google accounts must exist before Terraform binds roles by email; otherwise IAM rejects the binding.
-- Terraform (Phase 1) grants dataset-scoped `bigquery.dataViewer` on `analytics_data` only. Grant the audit dataset to a different test user only.
+- `terraform/identity/google` (section 5.4) grants dataset-scoped `bigquery.dataViewer` on `analytics_data` only. Grant the audit dataset to a different test user only.
 - Each user also needs `roles/bigquery.jobUser` on the project to run queries.
 
 ### 4.6 Cleanup of the old federation
@@ -120,18 +120,61 @@ Once Phase 4 is done, remove the old pool, provider and service-account binding 
 
 Verify: `bq query` as a test user (via `gcloud auth login` as that account) returns rows from `analytics_data.regional_sales` and is denied on `audit_logs`.
 
-## 5. Keycloak (partly automated, partly manual)
+## 5. Identity seed: Keycloak, Entra and Google from one file
 
-Terraform (Phase 1) creates the realm, users, groups, clients and consent-required scopes. Manual steps:
-1. Set initial passwords for the test users in the admin console (Users -> <user> -> Credentials), mark them temporary, and sign in once to change them. Do not put passwords in Terraform files or the repo.
-2. Confirm the clients have **Direct access grants** off, and that the optional scopes show **Consent Required** on.
-3. Confirm the account console (`/realms/<realm>/account`) lets a user see and revoke the agent's granted scopes.
+In the enterprise, users, groups and roles are already synced into the IdP, Entra and Google. On the POC you stand that sync in with `identity/users.yaml`, which Terraform applies to all three systems (`terraform/identity/{keycloak,entra,google}`). Nothing secret lives in that file.
+
+### 5.1 Edit the user file
+1. Open `identity/users.yaml`. Keep the three personas or change them.
+2. Set `settings.entra_default_domain` to your test tenant's domain and make every `emails.entra_upn` end with it.
+3. Replace each `emails.google` placeholder (`*@example.com`) with a **real Google account** you control. The Google Terraform root refuses to apply while placeholders remain. A user without BigQuery groups (Charlie) needs no Google account.
+4. Regenerate the derived map and run the offline checks:
+   ```bash
+   node scripts/identity-build-map.js
+   node scripts/identity-check.js
+   ```
+
+### 5.2 Keycloak
+```bash
+source .env.keycloak                       # TF_VAR_keycloak_admin_user / _password
+kubectl -n keycloak port-forward svc/keycloak-service 8080:8080 &
+terraform -chdir=terraform/identity/keycloak init
+terraform -chdir=terraform/identity/keycloak apply
+```
+Creates the realm, groups, users (without credentials), one realm role per agent scope, the `web-frontend` PKCE client with **Consent Required** and the optional `mcp:*` scopes, and the `agent-orchestrator-client` / `mcp-azure-service` clients. Manual steps afterwards:
+1. Set a password for each test user (admin console -> Users -> <user> -> Credentials, mark it temporary) and sign in once at `/realms/azure-wif-realm/account` to change it. Do not put passwords in Terraform files or the repo.
+2. Confirm `web-frontend` has **Direct access grants** off and **Consent required** on.
+3. Confirm the account console lets a user see and revoke the agent's granted scopes.
+
+### 5.3 Entra
+```bash
+az login --tenant <tenant-id>
+terraform -chdir=terraform/identity/entra init
+terraform -chdir=terraform/identity/entra apply -var storage_account_name=<account> -var resource_group_name=<rg>
+```
+Creates the users, `poc-<group>` security groups, memberships, and **group-level** Storage RBAC on the app1/app2 containers. Each user gets a random initial password that must be changed at first sign-in; read it deliberately with `terraform -chdir=terraform/identity/entra output -json initial_passwords` (it also lives in the local, git-ignored Terraform state, so protect that file). To let Terraform create the orchestrator and Azure MCP app registrations and admin consent on a fresh tenant, add `-var manage_entra_apps=true` (default off, because the repo's existing apps were made by `scripts/setup-entra-wif.sh`).
+
+### 5.4 Google
+```bash
+terraform -chdir=terraform/identity/google init
+terraform -chdir=terraform/identity/google apply -var gcp_project_id=<project-id>
+```
+Binds dataset-scoped BigQuery roles (and project `jobUser`) to each user's own Google account. The BigQuery datasets must already exist (`terraform/gcp`).
+
+### 5.5 Verify and offboard
+```bash
+node scripts/identity-check.js --live      # needs KEYCLOAK_URL/KEYCLOAK_ADMIN_*, `az login`, `bq` and GCP_PROJECT_ID
+node scripts/identity-offboard.js bob      # dry run
+node scripts/identity-offboard.js bob --apply
+```
+`--live` confirms each user exists with the right enabled state in Keycloak and Entra and holds exactly the expected BigQuery grants. The offboard script disables the user in all three systems through Terraform, ends their Keycloak sessions, and calls the grant-purge hook once the Google grant vault exists (Phase 4). Set `enabled: false` in `identity/users.yaml` afterwards so later applies keep the user disabled.
 
 ## 6. Secrets and where they go
 
 | Secret | Where it lives |
 |---|---|
-| Keycloak admin and user passwords | Keycloak only; entered by hand |
+| Keycloak admin password | `.env.keycloak` (git-ignored, generated); stored in the cluster as the `keycloak-admin` Secret |
+| Keycloak and Entra user passwords | Keycloak: entered by hand; Entra: random, in local Terraform state until changed at first sign-in |
 | Entra client assertion | Not a stored secret; signed by the SPIFFE SVID |
 | Google OAuth client secret | Secret Manager (`google-oauth-client-secret`) |
 | Per-user Google grants | Secret Manager, encrypted with the KMS key |
@@ -141,7 +184,7 @@ Check before every commit: `git status` shows no `.env*`, `*.tfvars`, `*.pem` or
 
 ## 7. Verification checklist (after Phases 1-2)
 
-1. `identity/users.yaml` lists each user; the consistency script reports each one resolved in Keycloak, Entra and Google.
+1. `identity/users.yaml` lists each user; `node scripts/identity-check.js --live` reports each one present in Keycloak, Entra and Google with the expected grants.
 2. A test user signs in through Keycloak (no minted tokens), and the orchestrator rejects a hand-edited token.
 3. The test user completes the Entra sign-in; the Azure MCP returns the `app1` file for a user in the right group and denies one who is not.
 4. First BigQuery call returns `authorization_required`; after Google consent, the retry succeeds.

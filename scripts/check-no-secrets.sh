@@ -17,7 +17,7 @@ if git grep -nE -e '-----BEGIN ([A-Z]+ )?PRIVATE KEY-----' -- . "${EXCLUDES[@]}"
   status=1
 fi
 
-if git grep -nE -e 'demo-obo-token-secret-key|demo-spire-secret-key' -- . "${EXCLUDES[@]}"; then
+if git grep -nE -e 'demo-obo-token-secret-key|demo-spire-secret-key|orchestrator-secret-key-2026|alicepassword|bobpassword' -- . "${EXCLUDES[@]}"; then
   echo "ERROR: a known hard-coded default secret or password is present (lines listed above)."
   status=1
 fi
