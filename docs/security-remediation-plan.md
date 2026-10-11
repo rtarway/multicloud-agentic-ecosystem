@@ -169,6 +169,12 @@ Each phase ends in a verifiable state. Phases 0-2 block everything else.
 
 ### Phase 0: Stop failing open (2-3 days)
 
+**Status: implemented.** Notes on how, and what is deliberately left:
+- `ALLOW_SIMULATION` (default off) is enforced by `shared/simulation.js`, vendored into each app by `scripts/sync-shared.sh`. Services that have no real path yet (orchestrator, GCP MCP) refuse to start without it; the others fail closed per request. The production guard keys off `DEPLOYMENT_ENV=production`, not `NODE_ENV`, because the images always set `NODE_ENV=production`.
+- Demo keys come from `shared/demoKeys.js` (env, `.demo-keys/`, or generated in memory). `certs/*-key.pem` and `certs/*-cert.pem` were removed from the tree. **They still exist in git history**: the owner should rewrite history (for example `git filter-repo --path certs/azure-test-key.pem --path certs/google-sts-key.pem --invert-paths`) or treat them as compromised. They were demo keys; nothing is rotated because nothing real used them.
+- `scripts/check-no-secrets.sh` (run by `scripts/test-all.sh`) fails the build if private keys or the known default secrets reappear.
+- Remaining by design until later phases: the demo login in `web-frontend` (Phase 2), the Keycloak realm file with demo credentials (Phase 1), loose actor prefix checks (Phase 2), the metadata-server token fallback in the BigQuery client (Phase 4), and the `/api/tools/:name` REST path (Phase 7).
+
 1. Make `ALLOW_SIMULATION=false` the default. When false, the orchestrator and MCP servers refuse to start with simulated SPIRE, HMAC tokens or committed keys. Simulation moves behind an explicit `demo` profile.
 2. Delete the fallback chain in `tokenExchange.js`: no password grant, no client-credentials downgrade, no locally signed Entra/Google tokens. A failed exchange returns an error and halts the turn (I4, I5, G3).
 3. Remove the `simulate_rogue_actor` branch from production code; move it to a test helper (I7).

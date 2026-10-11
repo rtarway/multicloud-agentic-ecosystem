@@ -4,6 +4,7 @@
 const express = require('express');
 const DeclarativeEngine = require('./declarativeEngine');
 const { verifyOboToken } = require('./auth');
+const { assertStartupSafe } = require('./simulation');
 
 const app = express();
 app.use(express.json());
@@ -158,6 +159,7 @@ app.post('/api/tools/:name', async (req, res) => {
 
 // Start Server if invoked directly
 if (require.main === module) {
+  assertStartupSafe('azure-mcp-server');
   app.listen(PORT, () => {
     console.log(`===========================================================`);
     console.log(` Azure Low-Code Declarative MCP Server listening on ${PORT}`);

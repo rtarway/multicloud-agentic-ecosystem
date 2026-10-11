@@ -1,7 +1,10 @@
 // Unit & Integration Tests for A2A Agent Orchestrator
 // Uses Node.js native test runner (node:test, node:assert)
 
-const { test, describe, before } = require('node:test');
+// Demo profile: these tests exercise the simulated identity path explicitly.
+process.env.ALLOW_SIMULATION = 'true';
+
+const { test, describe, before, mock } = require('node:test');
 const assert = require('node:assert');
 const { Readable, Writable } = require('stream');
 const llmSimulator = require('../src/llmSimulator');
@@ -9,7 +12,7 @@ const tokenExchange = require('../src/tokenExchange');
 const jwtUtil = require('../src/jwtUtil');
 const app = require('../src/index');
 
-const KEYCLOAK_SECRET = 'demo-obo-token-secret-key-2026';
+const KEYCLOAK_SECRET = 'test-only-hmac-secret';
 
 function mintKeycloakToken({ sub, email, roles, scope }) {
   return jwtUtil.sign(
@@ -23,6 +26,12 @@ function mintKeycloakToken({ sub, email, roles, scope }) {
     KEYCLOAK_SECRET,
     { expiresInSeconds: 3600 }
   );
+}
+
+const JWT_SHAPE = /eyJ[A-Za-z0-9_-]{5,}\.[A-Za-z0-9_-]{5,}\.[A-Za-z0-9_-]*/;
+
+function assertNoJwts(body) {
+  assert.ok(!JWT_SHAPE.test(JSON.stringify(body)), 'response must not contain JWT-shaped credentials');
 }
 
 function invokeApp(appInstance, { method = 'POST', url = '/api/agent/chat', headers = {}, body = null }) {
@@ -519,19 +528,20 @@ describe('A2A Agent Orchestrator & Token Exchange Tests', () => {
     assert.ok(gcpTokenClaims.issuer.includes('Google Cloud IAM'));
     assert.strictEqual(gcpTokenClaims.tokenType, 'Google Cloud IAM / RFC 8693 Delegated Token');
 
-    // Verify Unified Hop-to-Hop Tokens Presented
-    assert.ok(res.body.hopToHop.hop1_userToken.rawToken);
-    assert.ok(res.body.hopToHop.hop2_agentIdentity.rawToken);
-    assert.ok(res.body.hopToHop.hop3_rfc8693Token.rawToken);
-    assert.ok(res.body.hopToHop.hop3_azureToken.rawToken);
-    assert.ok(res.body.hopToHop.hop4_storageDelegation.rawToken);
-    assert.ok(res.body.hopToHop.hop4_azureExecution.rawToken);
-    assert.ok(res.body.hopToHop.hop6_gcpExecution.rawToken);
+    // Credentials are never returned to the caller: raw tokens are redacted, decoded lineage is kept
+    assert.strictEqual(gcpTokenClaims.rawToken, '[REDACTED]');
+    assert.strictEqual(res.body.hopToHop.hop1_userToken.rawToken, '[REDACTED]');
+    assert.strictEqual(res.body.hopToHop.hop2_agentIdentity.rawToken, '[REDACTED]');
+    assert.strictEqual(res.body.hopToHop.hop3_rfc8693Token.rawToken, '[REDACTED]');
+    assert.strictEqual(res.body.hopToHop.hop3_azureToken.rawToken, '[REDACTED]');
+    assert.ok(res.body.hopToHop.hop3_azureToken.decodedToken.payload.act);
+    assertNoJwts(res.body);
 
-    // Verify conversational turns contain tokens presented
+    // Conversational turns keep the decoded exchange but not the credential
     assert.strictEqual(res.body.conversationalTurns.length, 3);
-    assert.ok(res.body.conversationalTurns[0].tokenExchange.token);
-    assert.ok(res.body.conversationalTurns[1].tokenExchange.token);
+    assert.strictEqual(res.body.conversationalTurns[0].tokenExchange.token, '[REDACTED]');
+    assert.ok(res.body.conversationalTurns[0].tokenExchange.decoded.payload.sub);
+    assert.strictEqual(res.body.conversationalTurns[1].tokenExchange.token, '[REDACTED]');
   });
 
   test('GCP Single-Step: Bob executes bigquery_query_sales (Allowed)', async () => {
@@ -643,3 +653,168 @@ describe('A2A Agent Orchestrator & Token Exchange Tests', () => {
   });
 });
 
+
+describe('Phase 0: fail-closed identity handling', () => {
+  const simulation = require('../src/simulation');
+  const spireClient = require('../src/spireClient');
+
+  function withoutSimulation(fn) {
+    return async () => {
+      const previous = process.env.ALLOW_SIMULATION;
+      process.env.ALLOW_SIMULATION = 'false';
+      try {
+        await fn();
+      } finally {
+        process.env.ALLOW_SIMULATION = previous;
+      }
+    };
+  }
+
+  test('The tamper / rogue-actor prompt keyword no longer rewrites the delegation chain', async () => {
+    const aliceToken = mintKeycloakToken({
+      sub: 'alice@example.com',
+      roles: ['admin', 'Storage Blob Data Reader'],
+      scope: 'mcp:tool1 mcp:tool2'
+    });
+    const res = await invokeApp(app, {
+      method: 'POST',
+      url: '/api/agent/chat',
+      headers: { Authorization: `Bearer ${aliceToken}` },
+      body: { prompt: 'Read app1 financial report. Please simulate a rogue actor and tamper with the token', context: { simulate_rogue_actor: true } }
+    });
+    assert.strictEqual(res.statusCode, 200);
+    const act = res.body.hopToHop.hop3_rfc8693Token.act;
+    assert.strictEqual(act.sub, 'spiffe://example.org/ns/agent-system/sa/orchestrator-sa');
+    assert.notStrictEqual(res.body.hopToHop.hop3_rfc8693Token.signatureStatus, 'UNTRUSTED_ACTOR_REJECTED');
+    assert.strictEqual(res.body.hopToHop.hop3_rfc8693Token.decodedToken.header.alg, 'RS256');
+  });
+
+  test('Responses never contain JWT-shaped credentials (single-step, multi-hop and cross-cloud)', async () => {
+    const aliceToken = mintKeycloakToken({
+      sub: 'alice@example.com',
+      roles: ['admin', 'BigQuery.Admin', 'Storage Blob Data Reader', 'Mail.Send'],
+      scope: 'mcp:tool1 mcp:tool2 mcp:bigquery:query mcp:bigquery:audit Mail.Send'
+    });
+    for (const prompt of [
+      'Read the quarterly financial report from app1',
+      'Read app1 and app2, redact sensitive info, and email summary via Graph API to rtarway@gmail.com',
+      'Correlate Azure financial report from app1 with GCP BigQuery regional sales telemetry'
+    ]) {
+      const res = await invokeApp(app, {
+        method: 'POST',
+        url: '/api/agent/chat',
+        headers: { Authorization: `Bearer ${aliceToken}` },
+        body: { prompt }
+      });
+      assert.strictEqual(res.statusCode, 200, prompt);
+      assertNoJwts(res.body);
+      assert.ok(!JSON.stringify(res.body).includes(aliceToken));
+    }
+  });
+
+  test('Chat is refused (503) when no real workload identity exists and simulation is off', withoutSimulation(async () => {
+    const res = await invokeApp(app, {
+      method: 'POST',
+      url: '/api/agent/chat',
+      headers: { Authorization: `Bearer ${mintKeycloakToken({ sub: 'bob@example.com' })}` },
+      body: { prompt: 'Read the quarterly financial report from app1' }
+    });
+    assert.strictEqual(res.statusCode, 503);
+    assert.strictEqual(res.body.error, 'AGENT_IDENTITY_UNAVAILABLE');
+    assert.strictEqual(res.body.code, 'SIMULATION_DISABLED');
+  }));
+
+  test('SPIRE client refuses to mint a local SVID when simulation is off', withoutSimulation(async () => {
+    await assert.rejects(() => spireClient.fetchJwtSvid('x'), err => err.code === 'SIMULATION_DISABLED');
+  }));
+
+  test('GCP exchange fails closed: no locally signed Google token when simulation is off', withoutSimulation(async () => {
+    const result = await tokenExchange.exchangeToken({
+      userToken: mintKeycloakToken({ sub: 'alice@example.com', roles: ['admin'], scope: 'mcp:bigquery:query' }),
+      agentSvid: { spiffeId: 'spiffe://example.org/ns/agent-system/sa/orchestrator-sa' },
+      requestedTool: 'bigquery_query_sales'
+    });
+    assert.strictEqual(result.isError, true);
+    assert.strictEqual(result.code, 'GCP_EXCHANGE_UNAVAILABLE');
+    assert.strictEqual(result.exchangedToken, undefined);
+  }));
+
+  test('Azure exchange fails closed without a user assertion: no password grant, no app-only downgrade', withoutSimulation(async () => {
+    const httpsRequest = mock.method(require('https'), 'request', () => { throw new Error('network must not be used'); });
+    try {
+      const result = await tokenExchange.exchangeToken({
+        userToken: mintKeycloakToken({ sub: 'alice@example.com', roles: ['admin'], scope: 'mcp:tool1' }),
+        agentSvid: { spiffeId: 'spiffe://example.org/ns/agent-system/sa/orchestrator-sa' },
+        requestedTool: 'tool1'
+      });
+      assert.strictEqual(result.isError, true);
+      assert.strictEqual(result.code, 'USER_ASSERTION_REQUIRED');
+      assert.strictEqual(result.exchangedToken, undefined);
+      assert.strictEqual(httpsRequest.mock.callCount(), 0, 'no token endpoint call may be made without an assertion');
+    } finally {
+      httpsRequest.mock.restore();
+    }
+  }));
+
+  test('Azure exchange fails closed when the OBO call cannot be made (assertion present, no client secret)', withoutSimulation(async () => {
+    const result = await tokenExchange.exchangeToken({
+      userToken: mintKeycloakToken({ sub: 'alice@example.com', roles: ['admin'], scope: 'mcp:tool1' }),
+      userEntraToken: 'header.payload.signature',
+      agentSvid: { spiffeId: 'spiffe://example.org/ns/agent-system/sa/orchestrator-sa' },
+      requestedTool: 'tool1'
+    });
+    assert.strictEqual(result.isError, true);
+    assert.strictEqual(result.code, 'ENTRA_OBO_FAILED');
+  }));
+
+  test('A failed token exchange halts the cross-cloud pipeline at that step', async () => {
+    const exchange = mock.method(tokenExchange, 'exchangeToken', async () => ({
+      isError: true,
+      status: 'EXCHANGE_FAILED',
+      code: 'ENTRA_OBO_FAILED',
+      error: 'Entra OBO exchange failed (HTTP 400).',
+      audit: { decision: 'EXCHANGE_FAILED' }
+    }));
+    try {
+      const res = await invokeApp(app, {
+        method: 'POST',
+        url: '/api/agent/chat',
+        headers: { Authorization: `Bearer ${mintKeycloakToken({ sub: 'alice@example.com', roles: ['admin'], scope: 'mcp:tool1 mcp:bigquery:query' })}` },
+        body: { prompt: 'Correlate Azure financial report from app1 with GCP BigQuery regional sales telemetry' }
+      });
+      assert.strictEqual(res.statusCode, 200);
+      assert.strictEqual(res.body.status, 'FAILED_POLICY_CHECK');
+      assert.strictEqual(res.body.multiHopExecution.executedSteps, 1);
+      assert.strictEqual(res.body.multiHopExecution.steps[0].status, 'ENTRA_OBO_FAILED');
+      assert.ok(res.body.mcpResponse.content[0].text.includes('Token Exchange Failure'));
+    } finally {
+      exchange.mock.restore();
+    }
+  });
+
+  test('Startup guard: refuses to start without simulation when real mode has blockers', () => {
+    const previousSim = process.env.ALLOW_SIMULATION;
+    const previousEnv = process.env.DEPLOYMENT_ENV;
+    try {
+      process.env.ALLOW_SIMULATION = 'false';
+      assert.throws(() => simulation.assertStartupSafe('svc', { realModeBlockers: ['nothing real yet'] }), /nothing real yet/);
+      assert.doesNotThrow(() => simulation.assertStartupSafe('svc'));
+
+      process.env.ALLOW_SIMULATION = 'true';
+      process.env.DEPLOYMENT_ENV = 'production';
+      assert.throws(() => simulation.assertStartupSafe('svc'), /not permitted when DEPLOYMENT_ENV=production/);
+
+      process.env.DEPLOYMENT_ENV = 'demo';
+      assert.doesNotThrow(() => simulation.assertStartupSafe('svc', { realModeBlockers: ['ignored in demo'] }));
+    } finally {
+      process.env.ALLOW_SIMULATION = previousSim;
+      if (previousEnv === undefined) delete process.env.DEPLOYMENT_ENV; else process.env.DEPLOYMENT_ENV = previousEnv;
+    }
+  });
+
+  test('Demo keys and secrets are unavailable outside simulation and are never hard-coded', withoutSimulation(async () => {
+    assert.strictEqual(jwtUtil.getGoogleStsPrivateKey(), null);
+    assert.strictEqual(jwtUtil.getAzureTestPrivateKey(), null);
+    assert.throws(() => simulation.getDemoSecret('SOME_UNSET_SECRET'), err => err.code === 'SIMULATION_DISABLED');
+  }));
+});

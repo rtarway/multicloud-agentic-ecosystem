@@ -5,6 +5,7 @@
 const express = require('express');
 const DeclarativeEngine = require('./declarativeEngine');
 const { verifyGcpOboToken } = require('./auth');
+const { assertStartupSafe } = require('./simulation');
 
 const app = express();
 app.use(express.json());
@@ -161,6 +162,11 @@ app.post('/api/tools/:name', async (req, res) => {
 });
 
 if (require.main === module) {
+  assertStartupSafe('gcp-mcp-server', {
+    realModeBlockers: [
+      'real Google credential handling is not implemented yet (Phase 4: per-user Google OAuth grant); the server would otherwise accept only locally generated demo tokens'
+    ]
+  });
   app.listen(PORT, '0.0.0.0', () => {
     console.log(`===========================================================`);
     console.log(` GCP BigQuery Low-Code MCP Server listening on 0.0.0.0:${PORT}`);

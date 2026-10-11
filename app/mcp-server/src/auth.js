@@ -1,6 +1,5 @@
 const jwtUtil = require('./jwtUtil');
 
-const JWT_SECRET = process.env.JWT_SECRET || 'demo-obo-token-secret-key-2026';
 const ENTRA_TENANT_ID = process.env.ENTRA_TENANT_ID || '81f26b58-159c-4879-80a0-bab30b5b4dd3';
 const ENTRA_MCP_APP_ID = process.env.ENTRA_CLIENT_ID || 'd5850aa0-a667-41c3-8dd0-16f2dee4da25';
 const EXPECTED_AUDIENCES = [
@@ -22,7 +21,10 @@ const AUTHORIZED_SENDERS = [
  *   - Keycloak & Local OBO tokens for test environments
  *   - Delegated human user identity via X-Delegated-Identity header or token claim
  */
-async function verifyOboToken(authHeader, delegatedHeader) {
+async function verifyOboToken(authHeader, ignoredDelegatedHeader) {
+  if (ignoredDelegatedHeader) {
+    console.warn('[MCP-AUTH] ⚠️ Ignoring caller-supplied X-Delegated-Identity; the user is taken from the verified token only.');
+  }
   if (!authHeader || !authHeader.startsWith('Bearer ')) {
     return {
       authenticated: false,
@@ -72,9 +74,7 @@ async function verifyOboToken(authHeader, delegatedHeader) {
     const tokenIss = decoded.iss;
     const isEntraIssuer = tokenIss && (
       tokenIss === `https://login.microsoftonline.com/${ENTRA_TENANT_ID}/v2.0` ||
-      tokenIss === `https://sts.windows.net/${ENTRA_TENANT_ID}/` ||
-      tokenIss.includes('microsoftonline.com') ||
-      tokenIss.includes('sts.windows.net')
+      tokenIss === `https://sts.windows.net/${ENTRA_TENANT_ID}/`
     );
     if (!isEntraIssuer) {
       return {
@@ -84,9 +84,15 @@ async function verifyOboToken(authHeader, delegatedHeader) {
     }
 
     // 1. Audience Verification
-    const tokenAud = Array.isArray(decoded.aud) ? decoded.aud : [decoded.aud];
+    const tokenAud = (Array.isArray(decoded.aud) ? decoded.aud : [decoded.aud]).filter(a => typeof a === 'string' && a);
+    if (tokenAud.length === 0) {
+      return {
+        authenticated: false,
+        error: 'Token audience verification failed: the aud claim is required.'
+      };
+    }
     const hasValidAud = tokenAud.some(a => EXPECTED_AUDIENCES.includes(a));
-    if (!hasValidAud && decoded.aud) {
+    if (!hasValidAud) {
       console.warn(`[MCP-AUTH] ❌ Audience check failed. Received: ${JSON.stringify(decoded.aud)}, Expected one of: [${EXPECTED_AUDIENCES.join(', ')}]`);
       return {
         authenticated: false,
@@ -167,35 +173,14 @@ async function verifyOboToken(authHeader, delegatedHeader) {
     }
     console.log(`[MCP-AUTH] ✅ App roles & scopes resolved: [${scopes.join(', ')}]`);
 
-    // 4. Resolve Delegated Human User Principal
+    // 4. Resolve Delegated Human User Principal (from the verified token only)
     const userUpn = decoded.upn || decoded.unique_name || decoded.email || decoded.sub || 'anonymous-user';
-    let delegatedUser = {
+    const delegatedUser = {
       sub: userUpn,
       email: userUpn,
       oid: decoded.oid || null,
       roles: roles
     };
-
-    if (delegatedHeader) {
-      try {
-        if (typeof delegatedHeader === 'string' && delegatedHeader.startsWith('{')) {
-          const parsed = JSON.parse(delegatedHeader);
-          delegatedUser.sub = parsed.sub || delegatedUser.sub;
-          delegatedUser.email = parsed.email || parsed.sub || delegatedUser.email;
-          if (Array.isArray(parsed.roles)) delegatedUser.roles = parsed.roles;
-        } else if (typeof delegatedHeader === 'string' && delegatedHeader.includes('.')) {
-          // Decoded JWT
-          const parsedJwt = jwtUtil.decode(delegatedHeader);
-          if (parsedJwt) {
-            delegatedUser.sub = parsedJwt.sub || delegatedUser.sub;
-            delegatedUser.email = parsedJwt.email || parsedJwt.preferred_username || parsedJwt.sub || delegatedUser.email;
-            if (Array.isArray(parsedJwt.roles)) delegatedUser.roles = parsedJwt.roles;
-          }
-        }
-      } catch {
-        // Fall back to token claims
-      }
-    }
     console.log(`[MCP-AUTH] ✅ Delegated user principal: sub='${delegatedUser.sub}', email='${delegatedUser.email}', roles=[${delegatedUser.roles.join(', ')}]`);
 
     const agentSpiffeId = actorSub || (tokenAzp ? `entra://${tokenAzp}` : 'spiffe://example.org/ns/agent-system/sa/orchestrator-sa');

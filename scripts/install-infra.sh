@@ -92,6 +92,17 @@ docker build -t gcp-mcp-server:v1.0.0 "${ROOT_DIR}/app/gcp-mcp-server"
 # Step 5: Deploy Kubernetes Workloads
 echo "--> 5. Deploying microservices to Kubernetes..."
 kubectl apply -f "${ROOT_DIR}/k8s/namespaces.yaml"
+
+# Demo profile only: throwaway signing keys shared by the simulated services (never committed; see .gitignore).
+echo "    Generating demo keys and creating the 'demo-keys' secret (demo profile)..."
+"${SCRIPT_DIR}/gen-demo-keys.sh" >/dev/null
+DEMO_KEYS_PATH="${DEMO_KEYS_DIR:-${ROOT_DIR}/.demo-keys}"
+kubectl create secret generic demo-keys -n agent-system \
+  --from-file=DEMO_AZURE_PRIVATE_KEY="${DEMO_KEYS_PATH}/azure-test-key.pem" \
+  --from-file=DEMO_AZURE_PUBLIC_KEY="${DEMO_KEYS_PATH}/azure-test-pub.pem" \
+  --from-file=DEMO_GOOGLE_PRIVATE_KEY="${DEMO_KEYS_PATH}/google-sts-key.pem" \
+  --from-file=DEMO_GOOGLE_PUBLIC_KEY="${DEMO_KEYS_PATH}/google-sts-pub.pem" \
+  --dry-run=client -o yaml | kubectl apply -f -
 kubectl apply -f "${ROOT_DIR}/k8s/mcp-server-deployment.yaml"
 kubectl apply -f "${ROOT_DIR}/k8s/gcp-mcp-server-deployment.yaml"
 kubectl apply -f "${ROOT_DIR}/k8s/agent-orchestrator-deployment.yaml"

@@ -4,6 +4,7 @@
 
 const crypto = require('crypto');
 const https = require('https');
+const { isSimulation, requireSimulation } = require('./simulation');
 
 class AzureStorageService {
   constructor() {
@@ -79,7 +80,7 @@ class AzureStorageService {
       : (!userRoles.includes('admin') && !userRoles.includes('auditor') && !userRoles.includes('regular-user') && !userRoles.includes('Storage Blob Data Contributor') && !userUpn.includes('bob') && !userUpn.includes('alice'));
 
     // Offline / Test environment short-circuit: evaluate Cloud IAM deterministically
-    if (process.env.NODE_ENV === 'test' || process.env.STORAGE_OFFLINE === 'true') {
+    if (isSimulation() && (process.env.NODE_ENV === 'test' || process.env.STORAGE_OFFLINE === 'true')) {
       if (isUnprivilegedUser) {
         const iamError = new Error(`Azure Storage HTTP 403 Forbidden: AuthorizationPermissionMismatch (Principal '${userUpn}' has no role assignment on container '${container}')`);
         iamError.statusCode = 403;
@@ -164,7 +165,9 @@ class AzureStorageService {
         throw liveErr;
       }
 
-      console.warn(`[AZURE-STORAGE] ⚠️ Azure Storage live endpoint unreachable (${liveErr.message}). Evaluating simulated Cloud IAM policy...`);
+      // Outside the demo profile an unreachable/failed storage call is an error, never an in-memory fixture.
+      requireSimulation(`in-memory blob fixture after storage failure (${liveErr.message})`);
+      console.warn(`[AZURE-STORAGE] ⚠️ Azure Storage live endpoint unreachable (${liveErr.message}). Evaluating simulated Cloud IAM policy (demo profile)...`);
 
       // Offline / Test Simulation Mode:
       // If the user does NOT have permission on storage (e.g. Bob or missing storage role), FAIL with 403!
@@ -206,7 +209,7 @@ class AzureStorageService {
       : (!userRoles.includes('admin') && !userRoles.includes('Storage Blob Data Contributor') && !userRoles.includes('regular-user') && !userUpn.includes('bob') && !userUpn.includes('alice'));
 
     // Offline / Test environment short-circuit: evaluate Cloud IAM deterministically
-    if (process.env.NODE_ENV === 'test' || process.env.STORAGE_OFFLINE === 'true') {
+    if (isSimulation() && (process.env.NODE_ENV === 'test' || process.env.STORAGE_OFFLINE === 'true')) {
       if (isUnprivilegedUser) {
         const iamError = new Error(`Azure Storage HTTP 403 Forbidden: AuthorizationPermissionMismatch (Principal '${userUpn}' lacks 'Storage Blob Data Contributor' role on container '${container}')`);
         iamError.statusCode = 403;
@@ -291,6 +294,8 @@ class AzureStorageService {
         throw liveErr;
       }
 
+      requireSimulation(`in-memory blob write after storage failure (${liveErr.message})`);
+
       if (isUnprivilegedUser) {
         const iamError = new Error(`Azure Storage HTTP 403 Forbidden: AuthorizationPermissionMismatch (Principal '${userUpn}' has no write role assignment on container '${container}')`);
         iamError.statusCode = 403;
@@ -318,6 +323,7 @@ class AzureStorageService {
   }
 
   async listBlobs(container) {
+    requireSimulation('in-memory blob listing (no live listing implemented)');
     const bucket = this.inMemoryBuckets[container];
     if (!bucket) {
       throw new Error(`Azure Storage container '${container}' does not exist.`);

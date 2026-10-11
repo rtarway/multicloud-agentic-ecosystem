@@ -75,7 +75,7 @@ http://localhost:3000
 
 ---
 
-## 🧪 Run Full Automated Verification Suite (50/50 Tests)
+## 🧪 Run Full Automated Verification Suite
 ```bash
 ./scripts/test-all.sh
 ```

@@ -1,5 +1,6 @@
 // Zero-dependency RFC 7519 / RFC 8693 JWT Utility using Node.js built-in crypto
 const crypto = require('crypto');
+const demoKeys = require('./demoKeys');
 
 function base64UrlEncode(str) {
   return Buffer.from(str)
@@ -186,34 +187,13 @@ async function fetchEntraJwks(tenantId) {
   });
 }
 
+// Demo keys are only available when ALLOW_SIMULATION=true (see demoKeys.js); nothing is read from the repo.
 function getAzureTestCert() {
-  const fs = require('fs');
-  const path = require('path');
-  const possiblePaths = [
-    path.resolve(__dirname, '../../../certs/azure-test-cert.pem'),
-    path.resolve(__dirname, '../../certs/azure-test-cert.pem'),
-    path.resolve(process.cwd(), 'certs/azure-test-cert.pem'),
-    path.resolve(process.cwd(), '../certs/azure-test-cert.pem')
-  ];
-  for (const p of possiblePaths) {
-    if (fs.existsSync(p)) return fs.readFileSync(p, 'utf8');
-  }
-  return null;
+  return demoKeys.getDemoKey('azure', 'public');
 }
 
 function getAzureTestKey() {
-  const fs = require('fs');
-  const path = require('path');
-  const possiblePaths = [
-    path.resolve(__dirname, '../../../certs/azure-test-key.pem'),
-    path.resolve(__dirname, '../../certs/azure-test-key.pem'),
-    path.resolve(process.cwd(), 'certs/azure-test-key.pem'),
-    path.resolve(process.cwd(), '../certs/azure-test-key.pem')
-  ];
-  for (const p of possiblePaths) {
-    if (fs.existsSync(p)) return fs.readFileSync(p, 'utf8');
-  }
-  return null;
+  return demoKeys.getDemoKey('azure', 'private');
 }
 
 /**
@@ -250,7 +230,7 @@ async function verifyEntraToken(token, tenantId = '81f26b58-159c-4879-80a0-bab30
     }
   }
 
-  // 2. Fallback to local test certificate for hermetic offline test suites
+  // 2. Demo-only fallback: locally generated test key (null unless ALLOW_SIMULATION=true)
   const testCert = getAzureTestCert();
   if (testCert) {
     return verifyRS256(token, testCert);

@@ -31,8 +31,17 @@ spec:
               value: "2026-07-15"
             - name: AZURE_STORAGE_ACCOUNT
               value: "azwifstoragepoc"
-            - name: JWT_SECRET
-              value: "demo-obo-token-secret-key-2026"
+            # DEMO PROFILE: identity is simulated. Remove ALLOW_SIMULATION to run the (not yet complete) real path.
+            - name: ALLOW_SIMULATION
+              value: "true"
+            - name: DEPLOYMENT_ENV
+              value: "demo"
+            - name: DEMO_AZURE_PUBLIC_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: demo-keys
+                  key: DEMO_AZURE_PUBLIC_KEY
+                  optional: true
           resources:
             requests:
               cpu: 100m

@@ -5,6 +5,8 @@ const express = require('express');
 const http = require('http');
 const path = require('path');
 const jwtUtil = require('./jwtUtil');
+const { isSimulation, getDemoSecret, assertStartupSafe } = require('./simulation');
+const { redactDeep } = require('./redact');
 
 const app = express();
 app.use(express.json());
@@ -13,7 +15,6 @@ app.use(express.static(path.join(__dirname, '..', 'public')));
 const PORT = process.env.PORT || 3000;
 const AGENT_URL = process.env.AGENT_ORCHESTRATOR_URL || 'http://localhost:3001';
 const KEYCLOAK_URL = process.env.KEYCLOAK_URL || 'http://localhost:8080';
-const JWT_SECRET = process.env.JWT_SECRET || 'demo-obo-token-secret-key-2026';
 
 // Health Check
 app.get('/healthz', (req, res) => {
@@ -66,14 +67,24 @@ const USER_CONFIGS = {
 USER_CONFIGS['alice-no-mail'] = USER_CONFIGS.charlie;
 
 // Pre-configured Users List Endpoint for POC Login Screen
-app.get('/api/users', (req, res) => {
+// The login below mints tokens itself and lists demo credentials. That is acceptable only in the demo profile;
+// the real OIDC login replaces it in Phase 2.
+function requireDemoLogin(req, res, next) {
+  if (isSimulation()) return next();
+  return res.status(503).json({
+    error: 'LOGIN_DISABLED',
+    message: 'Demo login is disabled (ALLOW_SIMULATION is not true). Real OIDC login is not implemented yet.'
+  });
+}
+
+app.get('/api/users', requireDemoLogin, (req, res) => {
   res.json({
     users: [USER_CONFIGS.alice, USER_CONFIGS.bob, USER_CONFIGS.charlie]
   });
 });
 
 // Authentication Endpoint: Keycloak Login Simulation & Direct Grant
-app.post('/api/login', async (req, res) => {
+app.post('/api/login', requireDemoLogin, async (req, res) => {
   const { username, password, userType } = req.body || {};
 
   let resolvedUser = 'bob';
@@ -101,7 +112,7 @@ app.post('/api/login', async (req, res) => {
       roles: user.roles,
       scope: user.scopes.join(' ')
     },
-    JWT_SECRET,
+    getDemoSecret('JWT_SECRET'),
     { expiresInSeconds: 3600 }
   );
 
@@ -110,13 +121,15 @@ app.post('/api/login', async (req, res) => {
   const orchestratorAudience = `api://${ENTRA_CLIENT_ID}`;
   let liveEntraUserToken = null;
 
-  // Attempt live Entra ID ROPC acquisition if running against live Entra
+  // Optional live Entra sign-in for the demo profile. The password must be supplied explicitly through the
+  // environment; no default credential exists. (Replaced by an auth-code + PKCE flow in Phase 3.)
   try {
+    if (!process.env.DEMO_ENTRA_USER_PASSWORD) throw new Error('DEMO_ENTRA_USER_PASSWORD not set');
     const postData = require('querystring').stringify({
       grant_type: 'password',
       client_id: ENTRA_CLIENT_ID,
       username: user.email,
-      password: user.password === 'Password123!' ? 'Password123!Safe' : user.password,
+      password: process.env.DEMO_ENTRA_USER_PASSWORD,
       scope: `${orchestratorAudience}/access_as_user openid profile`
     });
 
@@ -171,7 +184,7 @@ app.post('/api/login', async (req, res) => {
 
   const entraToken = liveEntraUserToken || (azureTestKey
     ? jwtUtil.signRS256(entraPayload, azureTestKey, { kid: 'azure-test-key-1', expiresInSeconds: 3600 })
-    : jwtUtil.sign(entraPayload, JWT_SECRET, { expiresInSeconds: 3600 }));
+    : jwtUtil.sign(entraPayload, getDemoSecret('JWT_SECRET'), { expiresInSeconds: 3600 }));
 
   // 3. Mint Google Cloud IAM / Google STS Subject Token (RS256 PKI - Option 3 Workload Identity Pool)
   const googlePrivateKey = jwtUtil.getGoogleStsPrivateKey();
@@ -203,7 +216,7 @@ app.post('/api/login', async (req, res) => {
 
   const googleIamToken = googlePrivateKey
     ? jwtUtil.signRS256(gcpPayload, googlePrivateKey, { expiresInSeconds: 3600 })
-    : jwtUtil.sign(gcpPayload, JWT_SECRET, { expiresInSeconds: 3600 });
+    : jwtUtil.sign(gcpPayload, getDemoSecret('JWT_SECRET'), { expiresInSeconds: 3600 });
 
   return res.json({
     authenticated: true,
@@ -247,7 +260,7 @@ app.post('/api/chat', async (req, res) => {
   // If local test dispatcher injected, use it
   if (app.locals.agentDispatcher) {
     const result = await app.locals.agentDispatcher(prompt, token);
-    return res.json(result);
+    return res.json(redactDeep(result));
   }
 
   const agentUrl = new URL('/api/agent/chat', AGENT_URL);
@@ -257,7 +270,7 @@ app.post('/api/chat', async (req, res) => {
     agentRes.on('data', chunk => (data += chunk));
     agentRes.on('end', () => {
       try {
-        res.status(agentRes.statusCode).json(JSON.parse(data));
+        res.status(agentRes.statusCode).json(redactDeep(JSON.parse(data)));
       } catch {
         res.status(agentRes.statusCode).send(data);
       }
@@ -277,6 +290,7 @@ app.post('/api/chat', async (req, res) => {
 });
 
 if (require.main === module) {
+  assertStartupSafe('web-frontend');
   app.listen(PORT, () => {
     console.log(`===========================================================`);
     console.log(` Web Frontend running on http://localhost:${PORT}`);

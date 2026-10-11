@@ -145,11 +145,11 @@ az webapp config appsettings set \
     SCM_DO_BUILD_DURING_DEPLOYMENT=true \
     MCP_PROTOCOL_VERSION="2026-07-15" \
     AZURE_STORAGE_ACCOUNT="$STORAGE_ACCOUNT" \
-    JWT_SECRET="${JWT_SECRET:-demo-obo-token-secret-key-2026}" \
     ENTRA_TENANT_ID="${ENTRA_TENANT_ID:-81f26b58-159c-4879-80a0-bab30b5b4dd3}" \
     ENTRA_CLIENT_ID="${ENTRA_CLIENT_ID:-d5850aa0-a667-41c3-8dd0-16f2dee4da25}" \
     ENTRA_AUDIENCE="${ENTRA_AUDIENCE:-api://d5850aa0-a667-41c3-8dd0-16f2dee4da25}" \
     NODE_ENV="production" \
+    DEPLOYMENT_ENV="production" \
   --output table
 
 # 8. Package and Deploy Artifact

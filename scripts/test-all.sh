@@ -15,6 +15,10 @@ echo "================================================================="
 
 NODE_BIN="$(command -v /usr/local/bin/node || command -v node)"
 
+echo "--> 0. Verifying shared helpers are in sync and no secrets are committed..."
+"${ROOT_DIR}/scripts/sync-shared.sh" --check
+"${ROOT_DIR}/scripts/check-no-secrets.sh"
+
 echo "--> 1. Testing Azure Low-Code Declarative MCP Server (Spec 2026-07-15)..."
 cd "${ROOT_DIR}/app/mcp-server"
 "$NODE_BIN" --test test/*.test.js
@@ -37,5 +41,5 @@ for f in "${ROOT_DIR}"/k8s/*.yaml; do
 done
 
 echo "================================================================="
-echo " ALL TESTS AND VALIDATIONS PASSED SUCCESSFULLY! (50/50 Passed)"
+echo " ALL TESTS AND VALIDATIONS PASSED SUCCESSFULLY!"
 echo "================================================================="

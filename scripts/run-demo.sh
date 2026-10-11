@@ -9,6 +9,9 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 ROOT_DIR="$(cd "${SCRIPT_DIR}/.." && pwd)"
 
+# Demo profile: identity providers, SPIRE and cloud IAM are simulated with throwaway in-process keys.
+export ALLOW_SIMULATION=true
+
 echo "================================================================="
 echo " Multi-Cloud Agentic Ecosystem: End-to-End CLI Demo"
 echo " (Azure Storage WIF + GCP BigQuery WIF + RFC 8693 Multi-Hop Chains)"
@@ -22,11 +25,11 @@ const agentApp = require('${ROOT_DIR}/app/agent-orchestrator/src/index');
 const frontendApp = require('${ROOT_DIR}/app/web-frontend/src/index');
 const jwtUtil = require('${ROOT_DIR}/app/agent-orchestrator/src/jwtUtil');
 
-const SECRET = 'demo-obo-token-secret-key-2026';
+const SECRET = require('crypto').randomBytes(32).toString('hex'); // per-run demo secret (never hard-coded)
 
 // Direct in-process wiring for instant, clean CLI demonstration
 agentApp.locals.mcpDispatcher = async (name, args, token) => {
-  const auth = require('${ROOT_DIR}/app/mcp-server/src/auth').verifyOboToken('Bearer ' + token);
+  const auth = await require('${ROOT_DIR}/app/mcp-server/src/auth').verifyOboToken('Bearer ' + token);
   const engine = new (require('${ROOT_DIR}/app/mcp-server/src/declarativeEngine'))();
   return await engine.executeTool(name, args, auth);
 };
@@ -45,6 +48,16 @@ frontendApp.locals.agentDispatcher = async (prompt, token) => {
     agentSvid: svid,
     requestedTool: plan.plannedTool
   });
+
+  if (exchange.isError) {
+    // Token exchange refused (for example RFC 8693 scope escalation): nothing is dispatched downstream
+    return {
+      prompt,
+      oboExchange: { subject: exchange.audit?.subject, actor: exchange.audit?.actor, scopes: 'NONE', actorChain: [] },
+      plan,
+      mcpResponse: { isError: true, content: [{ type: 'text', text: exchange.error }], audit: exchange.audit }
+    };
+  }
 
   const isGcp = plan.cloud === 'GCP' || (plan.plannedTool && plan.plannedTool.startsWith('bigquery_'));
   const mcpRes = isGcp

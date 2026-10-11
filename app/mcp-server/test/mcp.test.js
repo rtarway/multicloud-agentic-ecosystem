@@ -1,6 +1,10 @@
 // Unit and Integration Tests for Low-Code Declarative MCP Server
 // Uses Node.js native test runner (node:test, node:assert) with in-process Express execution
 
+// Demo profile: tokens are signed with locally generated demo keys and storage may use its in-memory fixture.
+process.env.ALLOW_SIMULATION = 'true';
+process.env.STORAGE_OFFLINE = 'true';
+
 const { test, describe } = require('node:test');
 const assert = require('node:assert');
 const { Readable, Writable } = require('stream');
@@ -350,23 +354,24 @@ describe('Azure Low-Code MCP Server Tests (Protocol Spec July 2026)', () => {
     assert.ok(res.result.content[0].text.includes('RFC 8693 Cryptographic chain verification failed'));
   });
 
-  test('Azure WIF & Entra ID Protection: Validates Microsoft Entra token with app roles and delegated user identity', async () => {
+  test('Azure WIF & Entra ID Protection: Validates Microsoft Entra token; the user comes from the token, never from X-Delegated-Identity', async () => {
     const entraTokenPayload = {
       iss: 'https://login.microsoftonline.com/81f26b58-159c-4879-80a0-bab30b5b4dd3/v2.0',
       tid: '81f26b58-159c-4879-80a0-bab30b5b4dd3',
       aud: 'api://d5850aa0-a667-41c3-8dd0-16f2dee4da25',
-      sub: 'a23206e1-2dda-4854-aac7-0536d2da2c4c',
+      sub: 'bob@example.com',
+      upn: 'bob@example.com',
       appid: 'a23206e1-2dda-4854-aac7-0536d2da2c4c',
-      roles: ['mcp:tool1']
+      roles: ['regular-user'],
+      scope: 'mcp:tool1'
     };
-    const entraToken = azureTestKey
-      ? jwtUtil.signRS256(entraTokenPayload, azureTestKey, { kid: 'azure-test-key-1', expiresInSeconds: 300 })
-      : jwtUtil.sign(entraTokenPayload, 'dummy', { expiresInSeconds: 300 });
+    const entraToken = jwtUtil.signRS256(entraTokenPayload, azureTestKey, { kid: 'azure-test-key-1', expiresInSeconds: 300 });
 
-    const delegatedUserHeader = JSON.stringify({
+    // A caller tries to impersonate Alice through the legacy identity header
+    const forgedHeader = JSON.stringify({
       sub: 'alice@example.com',
       email: 'alice@example.com',
-      roles: ['auditor', 'Storage Blob Data Reader']
+      roles: ['admin', 'auditor', 'Storage Blob Data Reader']
     });
 
     const res = await rpcRequest(
@@ -376,13 +381,68 @@ describe('Azure Low-Code MCP Server Tests (Protocol Spec July 2026)', () => {
         arguments: { container: 'app1', action: 'read', filename: 'financial-report.json' }
       },
       entraToken,
-      { 'x-delegated-identity': delegatedUserHeader }
+      { 'x-delegated-identity': forgedHeader }
     );
 
-    assert.strictEqual(res.result.isError, false);
-    assert.strictEqual(res.result.audit.principal, 'alice@example.com');
-    assert.strictEqual(res.result.audit.actingAgent, 'entra://a23206e1-2dda-4854-aac7-0536d2da2c4c');
-    assert.strictEqual(res.result.audit.decision, 'ALLOWED');
+    // Bob (token identity) has no role on app1: the forged header must not grant Alice's access
+    assert.strictEqual(res.result.isError, true);
+    assert.ok(!JSON.stringify(res.result).includes('alice@example.com'));
+  });
+
+  test('Audience is mandatory and compared exactly', async () => {
+    const base = {
+      iss: 'https://login.microsoftonline.com/81f26b58-159c-4879-80a0-bab30b5b4dd3/v2.0',
+      tid: '81f26b58-159c-4879-80a0-bab30b5b4dd3',
+      sub: 'alice@example.com',
+      upn: 'alice@example.com',
+      appid: 'a23206e1-2dda-4854-aac7-0536d2da2c4c',
+      scope: 'mcp:tool1',
+      act: { sub: 'spiffe://example.org/ns/agent-system/sa/orchestrator-sa' }
+    };
+    const call = async payload => rpcRequest(
+      'tools/call',
+      { name: 'tool1', arguments: { container: 'app1', action: 'read', filename: 'financial-report.json' } },
+      jwtUtil.signRS256(payload, azureTestKey, { kid: 'azure-test-key-1', expiresInSeconds: 300 })
+    );
+
+    const noAud = await call(base);
+    assert.strictEqual(noAud.result.isError, true);
+    assert.ok(noAud.result.content[0].text.includes('aud claim is required'));
+
+    const wrongAud = await call({ ...base, aud: 'api://attacker-app' });
+    assert.strictEqual(wrongAud.result.isError, true);
+    assert.ok(wrongAud.result.content[0].text.includes('audience verification failed'));
+  });
+
+  test('Issuer must match the configured tenant exactly (lookalike microsoftonline hosts rejected)', async () => {
+    const token = jwtUtil.signRS256({
+      iss: 'https://login.microsoftonline.com.attacker.example/81f26b58-159c-4879-80a0-bab30b5b4dd3/v2.0',
+      tid: '81f26b58-159c-4879-80a0-bab30b5b4dd3',
+      aud: 'api://d5850aa0-a667-41c3-8dd0-16f2dee4da25',
+      sub: 'alice@example.com',
+      appid: 'a23206e1-2dda-4854-aac7-0536d2da2c4c',
+      scope: 'mcp:tool1'
+    }, azureTestKey, { kid: 'azure-test-key-1', expiresInSeconds: 300 });
+    const res = await rpcRequest('tools/call', { name: 'tool1', arguments: { container: 'app1', action: 'read', filename: 'financial-report.json' } }, token);
+    assert.strictEqual(res.result.isError, true);
+    assert.ok(res.result.content[0].text.includes('issuer verification failed'));
+  });
+
+  test('Without simulation: local demo-signed tokens are rejected and no storage fixture is served', async () => {
+    const previousSim = process.env.ALLOW_SIMULATION;
+    const previousOffline = process.env.STORAGE_OFFLINE;
+    process.env.ALLOW_SIMULATION = 'false';
+    try {
+      const token = mintOboToken({ sub: 'alice@example.com', scopes: ['mcp:tool1'] });
+      const res = await rpcRequest('tools/call', { name: 'tool1', arguments: { container: 'app1', action: 'read', filename: 'financial-report.json' } }, token);
+      assert.strictEqual(res.result.isError, true);
+
+      const storage = require('../src/azureStorage');
+      await assert.rejects(() => storage.listBlobs('app1'), err => err.code === 'SIMULATION_DISABLED');
+      assert.strictEqual(require('../src/jwtUtil').getAzureTestKey(), null);
+    } finally {
+      process.env.ALLOW_SIMULATION = previousSim;
+      process.env.STORAGE_OFFLINE = previousOffline;
+    }
   });
 });
-

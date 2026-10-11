@@ -3,10 +3,10 @@
 
 const fs = require('fs');
 const jwtUtil = require('./jwtUtil');
+const { requireSimulation, getDemoSecret } = require('./simulation');
 
 const DEFAULT_SOCKET_PATH = '/run/spire/sockets/agent.sock';
 const AGENT_SPIFFE_ID = process.env.AGENT_SPIFFE_ID || 'spiffe://example.org/ns/agent-system/sa/orchestrator-sa';
-const SPIRE_SECRET = process.env.SPIRE_SECRET || 'demo-spire-secret-key-2026';
 
 class SpireClient {
   constructor(socketPath) {
@@ -21,15 +21,18 @@ class SpireClient {
 
   /**
    * Fetches a JWT-SVID for the agent workload.
-   * In K8s with SPIRE, this communicates with the SPIRE Workload API.
-   * In local/simulated environment, it creates a cryptographically signed JWT-SVID with the SPIFFE ID.
+   *
+   * The SPIRE Workload API is not called yet (Phase 2). Until it is, the only available SVID is a
+   * locally signed stand-in, which exists solely for the demo profile and is refused otherwise.
    */
   async fetchJwtSvid(audience = 'azure-mcp-server') {
-    // Generate/fetch SPIFFE JWT-SVID
+    requireSimulation('locally signed JWT-SVID (SPIRE Workload API client not implemented)');
+
     const svidPayload = {
       sub: AGENT_SPIFFE_ID,
       aud: audience,
       iss: 'https://spire.example.org',
+      x_simulated: true,
       spiffe: {
         trustDomain: 'example.org',
         namespace: 'agent-system',
@@ -37,13 +40,13 @@ class SpireClient {
       }
     };
 
-    const token = jwtUtil.sign(svidPayload, SPIRE_SECRET, { expiresInSeconds: 300 });
+    const token = jwtUtil.sign(svidPayload, getDemoSecret('SPIRE_SECRET'), { expiresInSeconds: 300 });
 
     return {
       spiffeId: AGENT_SPIFFE_ID,
       token,
       audience,
-      isSimulated: !this.hasWorkloadApi
+      isSimulated: true
     };
   }
 }

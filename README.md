@@ -1,7 +1,7 @@
 # Multi-Cloud Agentic Ecosystem & Workload Identity Federation (WIF) POC
 ### Azure Cloud Storage &bull; Google Cloud BigQuery &bull; RFC 8693 Multi-Hop Recursive Actor Chains &bull; Low-Code Declarative MCP Server (July 2026 Spec)
 
-[![Tests](https://img.shields.io/badge/Tests-50%2F50%20Passed-brightgreen)](./scripts/test-all.sh)
+[![Tests](https://img.shields.io/badge/Tests-run%20scripts%2Ftest--all.sh-brightgreen)](./scripts/test-all.sh)
 [![Security Standards](https://img.shields.io/badge/Compliance-NIST%20SP%20800--207%20%7C%20OWASP%20Top%2010%20%7C%20MAESTRO-blue)](./docs/multi-hop-actor-chain-guide.md)
 [![MCP Spec](https://img.shields.io/badge/MCP%20Spec-2026--07--15-orange)](./app/mcp-server/tools.yaml)
 
@@ -13,10 +13,24 @@ It proves **secret-free Workload Identity Federation (WIF)**, **direct subject I
 
 ## ⚡ Quick Start
 
-### 1. Run the Automated Verification Suite (50/50 Tests)
+### 0. Demo profile vs. real mode (read first)
+Nothing in this repo produces, accepts or falls back to a locally minted credential **unless you opt in** with
+`ALLOW_SIMULATION=true` (the demo profile). With it unset, services refuse to start (or fail closed per request)
+rather than use simulated SPIRE identities, locally signed tokens or in-memory data fixtures. The demo launchers
+(`scripts/run-demo.sh`, `scripts/start-ui.js`, the k8s demo manifests) set it for you; the unit tests set it in-file.
+
+- Demo signing keys are never committed. They are generated in memory per process, or on disk with
+  `scripts/gen-demo-keys.sh` (git-ignored `.demo-keys/`).
+- `DEPLOYMENT_ENV=production` forbids the demo profile.
+- Real-mode identity (OIDC login, SPIRE, per-cloud user delegation) is being built in the phases of
+  [`docs/security-remediation-plan.md`](./docs/security-remediation-plan.md).
+
+### 1. Run the Automated Verification Suite
 ```bash
+npm install --prefix app/mcp-server   # one-time: installs dependencies (the other apps reuse them or install their own)
 ./scripts/test-all.sh
 ```
+Also verifies that the vendored `shared/` helpers are in sync and that no private keys or known default secrets are committed.
 Runs test suites across all 4 services:
 - `app/web-frontend`: 8/8 passed
 - `app/agent-orchestrator`: 18/18 passed
@@ -184,7 +198,7 @@ multicloud-agentic-ecosystem/
 │   ├── agent-orchestrator-deployment.yaml
 │   └── web-frontend-deployment.yaml
 ├── scripts/                            # Automation & Verification
-│   ├── test-all.sh                     # Unified test suite (50/50 tests)
+│   ├── test-all.sh                     # Unified test suite + secret/sync guards
 │   └── run-demo.sh                     # CLI Demo runner (Scenarios A through G)
 └── docs/                               # Architecture and Guides
     ├── multi-hop-actor-chain-guide.md  # RFC 8693 §4.1, NIST SP 800-207, MAESTRO, OWASP Guide

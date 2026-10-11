@@ -5,12 +5,8 @@
 
 const https = require('https');
 const querystring = require('querystring');
-const crypto = require('crypto');
 const jwtUtil = require('./jwtUtil');
-
-const { privateKey: rsaPrivateKey } = crypto.generateKeyPairSync('rsa', { modulusLength: 2048 });
-
-const OBO_SECRET = process.env.JWT_SECRET || 'demo-obo-token-secret-key-2026';
+const { isSimulation } = require('./simulation');
 
 // Load .env if present
 try {
@@ -41,8 +37,6 @@ const GCP_PROJECT_NUMBER = process.env.GCP_PROJECT_NUMBER || '834200279688';
 const GCP_POOL_ID = process.env.GCP_POOL_ID || 'k8s-agent-pool';
 const GCP_PROVIDER_ID = process.env.GCP_PROVIDER_ID || 'spire-oidc-provider';
 const GCP_MCP_AUDIENCE = process.env.GCP_MCP_AUDIENCE || 'gcp-bigquery-mcp-server';
-// Google STS Workload Identity Pool Audience (RFC 8693)
-const GCP_STS_AUDIENCE = `//iam.googleapis.com/projects/${GCP_PROJECT_NUMBER}/locations/global/workloadIdentityPools/${GCP_POOL_ID}/providers/${GCP_PROVIDER_ID}`;
 const GCP_SERVICE_ACCOUNT = process.env.GCP_SERVICE_ACCOUNT || `gcp-mcp-sa@${GCP_PROJECT_ID}.iam.gserviceaccount.com`;
 
 
@@ -82,47 +76,6 @@ class TokenExchangeEngine {
       req.on('timeout', () => {
         req.destroy();
         reject(new Error('Azure Entra token exchange request timed out.'));
-      });
-      req.write(postData);
-      req.end();
-    });
-  }
-
-  /**
-   * Performs HTTP request to Google Cloud Security Token Service (STS) via RFC 8693
-   */
-  async _callGoogleStsTokenExchange(params) {
-    const postData = querystring.stringify(params);
-    const parsedUrl = new URL('https://sts.googleapis.com/v1/token');
-
-    return new Promise((resolve, reject) => {
-      const req = https.request(
-        parsedUrl,
-        {
-          method: 'POST',
-          headers: {
-            'Content-Type': 'application/x-www-form-urlencoded',
-            'Content-Length': Buffer.byteLength(postData)
-          },
-          timeout: 2000
-        },
-        res => {
-          let raw = '';
-          res.on('data', chunk => (raw += chunk));
-          res.on('end', () => {
-            try {
-              resolve({ statusCode: res.statusCode, body: JSON.parse(raw) });
-            } catch {
-              resolve({ statusCode: res.statusCode, body: raw });
-            }
-          });
-        }
-      );
-
-      req.on('error', reject);
-      req.on('timeout', () => {
-        req.destroy();
-        reject(new Error('Google Cloud STS token exchange request timed out.'));
       });
       req.write(postData);
       req.end();
@@ -266,13 +219,33 @@ class TokenExchangeEngine {
       cur = cur.act;
     }
 
-    // 3. If target is GCP, attempt Live Google Cloud STS Exchange with Credential Access Boundary (Gate 2)
+    // 3. GCP target.
+    // There is no real Google exchange yet (Phase 4 replaces this with a per-user Google OAuth grant held by
+    // the GCP MCP server). Outside the demo profile this fails closed instead of minting a lookalike token.
     if (isGcpTool || targetAudience === GCP_MCP_AUDIENCE || targetAudience.includes('googleapis.com')) {
+      if (!isSimulation()) {
+        return {
+          isError: true,
+          status: 'EXCHANGE_UNAVAILABLE',
+          code: 'GCP_EXCHANGE_UNAVAILABLE',
+          error: 'No real Google credential exchange is available (simulation disabled). Refusing to mint a locally signed Google token.',
+          tokenType: 'TOKEN_EXCHANGE_FAILED',
+          audit: {
+            subject: userEmail,
+            actor: agentSpiffeId,
+            requestedTool,
+            requiredScope: requiredScopeForTool,
+            decision: 'EXCHANGE_UNAVAILABLE',
+            code: 'GCP_EXCHANGE_UNAVAILABLE'
+          }
+        };
+      }
+
       const isAuditTool = requiredScopeForTool === 'mcp:bigquery:audit';
       const targetDataset = isAuditTool ? 'audit_logs' : 'analytics_data';
       const targetTable = isAuditTool ? 'access_audit' : 'regional_sales';
 
-      // GATE 2 (Pattern B): Google STS Credential Access Boundary (CAB)
+      // Demo-profile description of the intended resource boundary (no STS call is made).
       const credentialAccessBoundary = {
         accessBoundary: {
           accessBoundaryRules: [
@@ -290,39 +263,7 @@ class TokenExchangeEngine {
         }
       };
 
-      let liveStsToken = null;
-      try {
-        console.log(`\n=============================================================`);
-        console.log(`[ORCH-GCP-STS] 🌐 Calling Google Cloud STS Token Endpoint (RFC 8693 + CAB):`);
-        console.log(`[ORCH-GCP-STS]   Audience:      ${GCP_STS_AUDIENCE}`);
-        console.log(`[ORCH-GCP-STS]   Subject Token: [Keycloak IdP ID Token for ${userEmail}]`);
-        console.log(`[ORCH-GCP-STS]   Actor Token:   ${agentSpiffeId} (SPIFFE SVID)`);
-        console.log(`[ORCH-GCP-STS]   Lineage:       [${actorChain.join(' -> ')}]`);
-        console.log(`[ORCH-GCP-STS]   CAB Scope:     ${credentialAccessBoundary.accessBoundary.accessBoundaryRules[0].availableResource}`);
-
-        const stsResponse = await this._callGoogleStsTokenExchange({
-          grant_type: 'urn:ietf:params:oauth:grant-type:token-exchange',
-          audience: GCP_STS_AUDIENCE,
-          scope: 'https://www.googleapis.com/auth/cloud-platform',
-          requested_token_type: 'urn:ietf:params:oauth:token-type:access_token',
-          subject_token_type: 'urn:ietf:params:oauth:token-type:id_token',
-          subject_token: userToken || 'mock-user-token',
-          actor_token_type: 'urn:ietf:params:oauth:token-type:jwt',
-          actor_token: agentSvid || agentSpiffeId,
-          access_boundary: JSON.stringify(credentialAccessBoundary)
-        });
-
-        console.log(`[ORCH-GCP-STS] 📡 Google STS Response: HTTP ${stsResponse.statusCode}`);
-        if (stsResponse.statusCode === 200 && (stsResponse.body.access_token || stsResponse.body.id_token)) {
-          console.log(`[ORCH-GCP-STS]   ✅ CAB-Downscoped Token minted by Google Cloud STS!`);
-          liveStsToken = stsResponse.body.access_token || stsResponse.body.id_token;
-        }
-      } catch (err) {
-        console.log(`[ORCH-GCP-STS] ℹ️ Google Cloud STS live call note: ${err.message}`);
-      }
-
-      // Construct High-Fidelity Google Cloud IAM / Google STS Asymmetric Token
-      // Signed with Google STS Private Key (RS256 PKI), verified by GCP MCP Server with Google STS Public Cert
+      // Demo-only, locally signed stand-in for a Google-issued token (clearly flagged as simulated).
       const gcpClaims = {
         iss: 'https://sts.googleapis.com',
         aud: targetAudience || GCP_MCP_AUDIENCE,
@@ -337,6 +278,7 @@ class TokenExchangeEngine {
         downscoped: true,
         cloudPlatform: 'GCP',
         credentialAccessBoundary,
+        x_simulated: true,
         google_cloud_iam: {
           projectId: GCP_PROJECT_ID,
           projectNumber: GCP_PROJECT_NUMBER,
@@ -351,13 +293,11 @@ class TokenExchangeEngine {
       };
 
       const googleStsPrivateKey = jwtUtil.getGoogleStsPrivateKey();
-      const exchangedToken = liveStsToken || (googleStsPrivateKey
-        ? jwtUtil.signRS256(gcpClaims, googleStsPrivateKey, { expiresInSeconds: 300 })
-        : jwtUtil.sign(gcpClaims, OBO_SECRET, { expiresInSeconds: 300 }));
+      const exchangedToken = jwtUtil.signRS256(gcpClaims, googleStsPrivateKey, { expiresInSeconds: 300 });
 
       return {
         exchangedToken,
-        tokenType: liveStsToken ? 'GCP_STS_LIVE_TOKEN' : 'GCP_IAM_RFC8693_DELEGATION',
+        tokenType: 'GCP_IAM_RFC8693_DELEGATION',
         claims: gcpClaims,
         credentialAccessBoundary,
         delegatedUser: {
@@ -373,56 +313,24 @@ class TokenExchangeEngine {
           eligibleScopes: userEligibleScopes,
           grantedScopes: finalScopes,
           requestedTool,
-          tokenIssuer: 'Google Cloud IAM (GCP WIF / STS)',
+          tokenIssuer: 'Simulated Google Cloud IAM (demo profile)',
           credentialAccessBoundary
         }
       };
     }
 
-    // 4. Attempt Live Microsoft Entra ID Token Exchange (Native RFC 7523 / RFC 8693 On-Behalf-Of Flow)
+    // 4. Microsoft Entra ID On-Behalf-Of exchange.
+    // Only a real user assertion plus the confidential-client secret can produce a real OBO token. There is no
+    // password-grant or client-credentials fallback: a missing assertion would silently turn a user-delegated
+    // call into an app-only one.
     let liveEntraToken = null;
-    let assertionToken = userEntraToken || null;
+    const assertionToken = userEntraToken || null;
+    let oboFailure = null;
 
-    // If no incoming assertion was passed from frontend, attempt to fetch user token for Orchestrator using Alice/Bob credentials
-    if (!assertionToken && userEmail && userEmail.includes('@')) {
+    if (assertionToken && ENTRA_CLIENT_SECRET) {
       try {
-        const defaultPw = 'Password123!Safe';
-        const userAssertionPostData = querystring.stringify({
-          grant_type: 'password',
-          client_id: ENTRA_AGENT_CLIENT_ID,
-          username: userEmail,
-          password: defaultPw,
-          scope: `api://${ENTRA_AGENT_CLIENT_ID}/access_as_user openid profile`
-        });
-        const assertionResp = await this._callEntraWifTokenExchange({
-          grant_type: 'password',
-          client_id: ENTRA_AGENT_CLIENT_ID,
-          username: userEmail,
-          password: defaultPw,
-          scope: `api://${ENTRA_AGENT_CLIENT_ID}/access_as_user openid profile`
-        });
-        if (assertionResp.statusCode === 200 && assertionResp.body.access_token) {
-          assertionToken = assertionResp.body.access_token;
-        }
-      } catch (e) {
-        // Fall back
-      }
-    }
-
-    try {
-      console.log(`\n=============================================================`);
-      console.log(`[ORCH-OBO] 🌐 Requesting Microsoft Entra ID Delegated OBO Token (RFC 8693 / RFC 7523):`);
-      console.log(`[ORCH-OBO]   Endpoint:    https://login.microsoftonline.com/${ENTRA_TENANT_ID}/oauth2/v2.0/token`);
-      console.log(`[ORCH-OBO]   Client ID:   ${ENTRA_AGENT_CLIENT_ID}`);
-      console.log(`[ORCH-OBO]   Audience:    ${targetAudience}`);
-      console.log(`[ORCH-OBO]   Subject:     ${userEmail}`);
-      console.log(`[ORCH-OBO]   Actor:       ${agentSpiffeId}`);
-      console.log(`[ORCH-OBO]   HasAssertion:${!!assertionToken}`);
-
-      let entraResponse;
-      if (assertionToken) {
-        // Authentic Entra ID On-Behalf-Of (OBO) Exchange
-        entraResponse = await this._callEntraWifTokenExchange({
+        console.log(`[ORCH-OBO] Requesting Microsoft Entra ID OBO token (audience: ${targetAudience}, subject: ${userEmail}, actor: ${agentSpiffeId})`);
+        const entraResponse = await this._callEntraWifTokenExchange({
           grant_type: 'urn:ietf:params:oauth:grant-type:jwt-bearer',
           client_id: ENTRA_AGENT_CLIENT_ID,
           client_secret: ENTRA_CLIENT_SECRET,
@@ -430,23 +338,37 @@ class TokenExchangeEngine {
           scope: `api://${ENTRA_MCP_APP_ID}/user_impersonation`,
           requested_token_use: 'on_behalf_of'
         });
-      } else {
-        // Fallback to client credentials if no user assertion available
-        entraResponse = await this._callEntraWifTokenExchange({
-          grant_type: 'client_credentials',
-          client_id: ENTRA_AGENT_CLIENT_ID,
-          client_secret: ENTRA_CLIENT_SECRET,
-          scope: `${ENTRA_AUDIENCE}/.default`
-        });
+        console.log(`[ORCH-OBO] Entra ID token response: HTTP ${entraResponse.statusCode}`);
+        if (entraResponse.statusCode === 200 && entraResponse.body && entraResponse.body.access_token) {
+          liveEntraToken = entraResponse.body.access_token;
+        } else {
+          oboFailure = `Entra OBO exchange failed (HTTP ${entraResponse.statusCode}${entraResponse.body && entraResponse.body.error ? `: ${entraResponse.body.error}` : ''}).`;
+        }
+      } catch (err) {
+        oboFailure = `Entra OBO exchange failed: ${err.message}`;
       }
+    } else if (!assertionToken) {
+      oboFailure = 'A user Entra assertion is required for the on-behalf-of exchange.';
+    } else {
+      oboFailure = 'ENTRA_CLIENT_SECRET is not configured for the on-behalf-of exchange.';
+    }
 
-      console.log(`[ORCH-OBO] 📡 Entra ID Token Response: HTTP ${entraResponse.statusCode}`);
-      if (entraResponse.statusCode === 200 && entraResponse.body.access_token) {
-        console.log(`[ORCH-OBO]   ✅ Real Microsoft Entra ID OBO token acquired!`);
-        liveEntraToken = entraResponse.body.access_token;
-      }
-    } catch (err) {
-      console.log(`[ORCH-OBO] ℹ️ Entra OBO Token call note: ${err.message}`);
+    if (!liveEntraToken && !isSimulation()) {
+      return {
+        isError: true,
+        status: 'EXCHANGE_FAILED',
+        code: assertionToken ? 'ENTRA_OBO_FAILED' : 'USER_ASSERTION_REQUIRED',
+        error: `${oboFailure} Refusing to fall back to an app-only or locally signed token.`,
+        tokenType: 'TOKEN_EXCHANGE_FAILED',
+        audit: {
+          subject: userEmail,
+          actor: agentSpiffeId,
+          requestedTool,
+          requiredScope: requiredScopeForTool,
+          decision: 'EXCHANGE_FAILED',
+          code: assertionToken ? 'ENTRA_OBO_FAILED' : 'USER_ASSERTION_REQUIRED'
+        }
+      };
     }
 
     // 5. Build Entra ID RFC 8693 Token Claims (RS256 PKI - Never Symmetric HMAC)
@@ -466,17 +388,17 @@ class TokenExchangeEngine {
       act: recursiveAct,
       actorChain,
       downscoped: true,
+      ...(liveEntraToken ? {} : { x_simulated: true }),
       delegationType: assertionToken ? 'RFC8693_ENTRA_OBO' : 'RFC8693_MULTI_HOP_CHAIN'
     };
 
-    const azureTestKey = jwtUtil.getAzureTestPrivateKey();
-    const exchangedToken = liveEntraToken || (azureTestKey
-      ? jwtUtil.signRS256(entraClaims, azureTestKey, { kid: 'azure-test-key-1', expiresInSeconds: 300 })
-      : jwtUtil.signRS256(entraClaims, rsaPrivateKey, { kid: 'azure-orchestrator-key-1', expiresInSeconds: 300 }));
+    // Demo profile only: locally signed stand-in for an Entra token (the non-simulation path returned above).
+    const exchangedToken = liveEntraToken ||
+      jwtUtil.signRS256(entraClaims, jwtUtil.getAzureTestPrivateKey(), { kid: 'azure-test-key-1', expiresInSeconds: 300 });
 
     return {
       exchangedToken,
-      tokenType: liveEntraToken ? (assertionToken ? 'AZURE_ENTRA_OBO_LIVE' : 'AZURE_ENTRA_WIF_LIVE') : 'AZURE_ENTRA_WIF_RS256_TEST',
+      tokenType: liveEntraToken ? 'AZURE_ENTRA_OBO_LIVE' : 'AZURE_ENTRA_WIF_RS256_TEST',
       claims: entraClaims,
       delegatedUser: {
         sub: userEmail,

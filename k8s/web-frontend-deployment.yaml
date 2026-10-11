@@ -33,6 +33,23 @@ spec:
               value: "http://agent-orchestrator.agent-system.svc.cluster.local:3001"
             - name: KEYCLOAK_URL
               value: "http://keycloak-service.keycloak.svc.cluster.local:8080"
+            # DEMO PROFILE: identity is simulated. Remove ALLOW_SIMULATION to run the (not yet complete) real path.
+            - name: ALLOW_SIMULATION
+              value: "true"
+            - name: DEPLOYMENT_ENV
+              value: "demo"
+            - name: DEMO_AZURE_PRIVATE_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: demo-keys
+                  key: DEMO_AZURE_PRIVATE_KEY
+                  optional: true
+            - name: DEMO_GOOGLE_PRIVATE_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: demo-keys
+                  key: DEMO_GOOGLE_PRIVATE_KEY
+                  optional: true
           resources:
             requests:
               cpu: 100m

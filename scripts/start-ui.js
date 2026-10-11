@@ -4,6 +4,9 @@
 
 const path = require('path');
 
+// This launcher is a DEMO profile: identity is simulated in-process with throwaway keys.
+process.env.ALLOW_SIMULATION = process.env.ALLOW_SIMULATION || 'true';
+
 process.env.PORT = '8080';
 const mcpApp = require('../app/mcp-server/src/index');
 

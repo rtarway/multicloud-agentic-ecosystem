@@ -1,13 +1,13 @@
+// Demo profile: tokens are signed with locally generated demo keys.
+process.env.ALLOW_SIMULATION = 'true';
+
 const test = require('node:test');
 const assert = require('node:assert/strict');
 const app = require('../src/index');
 const jwtUtil = require('../src/jwtUtil');
 
-const fs = require('fs');
-const path = require('path');
-
-const googleStsPrivateKey = fs.readFileSync(path.resolve(__dirname, '../../../certs/google-sts-key.pem'), 'utf8');
-const JWT_SECRET = process.env.JWT_SECRET || 'demo-obo-token-secret-key-2026';
+const googleStsPrivateKey = require('../src/demoKeys').getDemoKey('google', 'private');
+const HMAC_FORGERY_SECRET = 'attacker-chosen-secret';
 
 function mockRequest(method, url, headers = {}, body = {}) {
   return new Promise((resolve) => {
@@ -136,7 +136,7 @@ test('GCP BigQuery MCP Server Test Suite (Spec 2026-07-15 & RFC 8693 Multi-Hop)'
       iss: 'https://sts.googleapis.com',
       sub: 'bob@example.com',
       aud: 'gcp-bigquery-mcp-server'
-    }, JWT_SECRET, { expiresInSeconds: 300 });
+    }, HMAC_FORGERY_SECRET, { expiresInSeconds: 300 });
 
     const res = await mockRequest('POST', '/mcp', {
       authorization: `Bearer ${fakeHmacToken}`
@@ -341,5 +341,127 @@ test('GCP BigQuery MCP Server Test Suite (Spec 2026-07-15 & RFC 8693 Multi-Hop)'
     assert.equal(res.body.result.audit.decision, 'DENIED_BY_FGP');
     assert.equal(res.body.result.audit.policyId, 'prevent_unbounded_export');
     assert.ok(res.body.result.content[0].text.includes('Wildcard querying is strictly prohibited'));
+  });
+
+  await t.test('Audience is mandatory: a validly signed token without aud is rejected', async () => {
+    const payload = {
+      iss: 'https://sts.googleapis.com',
+      sub: 'bob@example.com',
+      scope: 'mcp:bigquery:query',
+      act: { sub: 'spiffe://example.org/ns/agent-system/sa/orchestrator-sa' }
+    };
+    const token = jwtUtil.signRS256(payload, googleStsPrivateKey, { expiresInSeconds: 300 });
+    const res = await mockRequest('POST', '/mcp', { authorization: `Bearer ${token}` }, {
+      jsonrpc: '2.0', id: 'no-aud', method: 'tools/call',
+      params: { name: 'bigquery_query_sales', arguments: { quarter: 'Q2-2026', region: 'emea', metric: 'revenue_breakdown' } }
+    });
+    assert.equal(res.body.result.isError, true);
+    assert.ok(res.body.result.content[0].text.includes('aud claim is required'));
+  });
+
+  await t.test('Audience must match exactly: substrings such as "gcp" or "run.app" no longer pass', async () => {
+    for (const aud of ['evil-gcp-service', 'https://attacker.run.app', 'gcp']) {
+      const token = mintToken({ aud });
+      const res = await mockRequest('POST', '/mcp', { authorization: `Bearer ${token}` }, {
+        jsonrpc: '2.0', id: 'bad-aud', method: 'tools/call',
+        params: { name: 'bigquery_query_sales', arguments: { quarter: 'Q2-2026', region: 'emea', metric: 'revenue_breakdown' } }
+      });
+      assert.equal(res.body.result.isError, true, aud);
+      assert.ok(res.body.result.content[0].text.includes('audience verification failed'), aud);
+    }
+  });
+
+  await t.test('Issuer must match exactly: lookalike googleapis.com hosts are rejected', async () => {
+    const token = mintToken({ iss: 'https://sts.googleapis.com.attacker.example' });
+    const res = await mockRequest('POST', '/mcp', { authorization: `Bearer ${token}` }, {
+      jsonrpc: '2.0', id: 'bad-iss', method: 'tools/call',
+      params: { name: 'bigquery_query_sales', arguments: { quarter: 'Q2-2026', region: 'emea', metric: 'revenue_breakdown' } }
+    });
+    assert.equal(res.body.result.isError, true);
+    assert.ok(res.body.result.content[0].text.includes('issuer verification failed'));
+  });
+
+  await t.test('X-Delegated-Identity cannot override the verified user or roles', async () => {
+    const token = mintToken({ sub: 'bob@example.com', scope: 'mcp:bigquery:query', roles: ['regular-user'] });
+    const res = await mockRequest('POST', '/mcp', {
+      authorization: `Bearer ${token}`,
+      'x-delegated-identity': JSON.stringify({ sub: 'alice@example.com', email: 'alice@example.com', roles: ['admin', 'BigQuery.Admin'] })
+    }, {
+      jsonrpc: '2.0', id: 'forged-header', method: 'tools/call',
+      params: { name: 'bigquery_audit_compliance', arguments: { dataset: 'audit_logs', timeRange: 'last_24h' } }
+    });
+    assert.equal(res.body.result.isError, true);
+    assert.equal(res.body.result.audit.principal, 'bob@example.com');
+    assert.equal(res.body.result.audit.decision, 'DENIED_BY_POLICY');
+  });
+
+  await t.test('Unsigned (alg=none) tokens are rejected', async () => {
+    const enc = o => Buffer.from(JSON.stringify(o)).toString('base64url');
+    const token = `${enc({ alg: 'none', typ: 'JWT' })}.${enc({ iss: 'https://sts.googleapis.com', sub: 'alice@example.com', aud: 'gcp-bigquery-mcp-server' })}.`;
+    const res = await mockRequest('POST', '/mcp', { authorization: `Bearer ${token}` }, {
+      jsonrpc: '2.0', id: 'alg-none', method: 'tools/call',
+      params: { name: 'bigquery_query_sales', arguments: { quarter: 'Q2-2026', region: 'emea', metric: 'revenue_breakdown' } }
+    });
+    assert.equal(res.body.result.isError, true);
+  });
+
+  await t.test('Without simulation the server accepts no locally signed token and serves no fixtures', async () => {
+    const previous = process.env.ALLOW_SIMULATION;
+    process.env.ALLOW_SIMULATION = 'false';
+    try {
+      const token = mintToken({ sub: 'alice@example.com', scope: 'mcp:bigquery:query mcp:bigquery:audit', roles: ['admin'] });
+      const res = await mockRequest('POST', '/mcp', { authorization: `Bearer ${token}` }, {
+        jsonrpc: '2.0', id: 'no-sim', method: 'tools/call',
+        params: { name: 'bigquery_query_sales', arguments: { quarter: 'Q2-2026', region: 'emea', metric: 'revenue_breakdown' } }
+      });
+      assert.equal(res.body.result.isError, true);
+
+      const bigquery = require('../src/bigqueryClient');
+      await assert.rejects(() => bigquery.querySales({ region: 'emea' }, { sub: 'alice@example.com' }), err => err.code === 'SIMULATION_DISABLED');
+      await assert.rejects(() => bigquery.queryAuditLogs({}, { sub: 'alice@example.com', roles: ['admin'] }), err => err.code === 'SIMULATION_DISABLED');
+    } finally {
+      process.env.ALLOW_SIMULATION = previous;
+    }
+  });
+
+  await t.test('BigQuery sales query is parameterized and rejects injected region values', async () => {
+    const bigquery = require('../src/bigqueryClient');
+    const { query, queryParameters } = bigquery.buildSalesQuery('wifdemoproject-507002', 'analytics_data', 'emea');
+    assert.ok(query.includes('region = @region'));
+    assert.ok(!query.includes("'emea'"), 'value must not be concatenated into SQL');
+    assert.deepEqual(queryParameters, [{ name: 'region', parameterType: { type: 'STRING' }, parameterValue: { value: 'emea' } }]);
+
+    assert.throws(() => bigquery.buildSalesQuery('wifdemoproject-507002', 'analytics_data', "emea' OR '1'='1"), /not an allowed analytics region/);
+    assert.throws(() => bigquery.buildSalesQuery('wifdemoproject-507002', 'analytics_data; DROP TABLE x', 'emea'), /Invalid BigQuery dataset/);
+    assert.throws(() => bigquery.buildSalesQuery('bad`project', 'analytics_data', 'emea'), /Invalid GCP project/);
+    await assert.rejects(() => bigquery.querySales({ region: "x' OR 1=1 --" }, { sub: 'bob@example.com' }), /not an allowed analytics region/);
+  });
+
+  await t.test('Live BigQuery requests carry named query parameters, not interpolated values', async () => {
+    const bigquery = require('../src/bigqueryClient');
+    const https = require('https');
+    const { mock } = require('node:test');
+    let sent = null;
+    const request = mock.method(https, 'request', (url, options, callback) => {
+      const { EventEmitter } = require('events');
+      const req = new EventEmitter();
+      req.write = chunk => { sent = JSON.parse(chunk); };
+      req.end = () => {
+        const res = new EventEmitter();
+        callback(res);
+        res.emit('data', JSON.stringify({ rows: [], jobReference: { jobId: 'job1' }, totalBytesProcessed: '0' }));
+        res.emit('end');
+      };
+      req.destroy = () => {};
+      return req;
+    });
+    try {
+      await bigquery.querySales({ region: 'apac' }, { sub: 'bob@example.com', gcpAccessToken: 'user-access-token' });
+      assert.equal(sent.parameterMode, 'NAMED');
+      assert.equal(sent.queryParameters[0].parameterValue.value, 'apac');
+      assert.ok(sent.query.includes('@region') && !sent.query.includes("'apac'"));
+    } finally {
+      request.mock.restore();
+    }
   });
 });
