@@ -74,6 +74,7 @@ before(async () => {
   });
   await new Promise(r => mcpServer.listen(0, '127.0.0.1', r));
   process.env.GCP_MCP_ENDPOINT = `http://127.0.0.1:${mcpServer.address().port}`;
+  process.env.AZURE_MCP_ENDPOINT = process.env.GCP_MCP_ENDPOINT;
 
   spireAgent = await startFakeSpireAgent((audience) => [{ spiffeId: ORCH, svid: `svid.for.${audience[0]}` }]);
   process.env.SPIRE_AGENT_SOCKET = spireAgent.socketPath;
@@ -244,6 +245,60 @@ describe('strict mode: consent, eligibility and the token exchange', () => {
       assert.strictEqual(received.length, 0);
     }
     idpMode = {};
+  });
+});
+
+describe('strict mode: Azure leg end to end (Entra faked)', () => {
+  const entraAssertion = jwt => jwt;
+  const fakeJwt = claims => `h.${Buffer.from(JSON.stringify(claims)).toString('base64url')}.s`;
+
+  test('Bob reads app2: OBO with the SVID as client assertion, then the Azure MCP receives the OBO token and an SVID for it', async () => {
+    const { mock } = require('node:test');
+    const entraParams = [];
+    const spy = mock.method(tokenExchange, '_callEntraWifTokenExchange', async params => {
+      entraParams.push(params);
+      return { statusCode: 200, body: { access_token: fakeJwt({ aud: process.env.ENTRA_MCP_APP_ID || 'd5850aa0-a667-41c3-8dd0-16f2dee4da25', scp: 'Mcp.Storage.ReadApp2', upn: BOB }) } };
+    });
+    try {
+      received.length = 0; idpMode = {};
+      const bobEntra = fakeJwt({ upn: BOB, aud: 'api://orchestrator' });
+      const res = await invokeApp({
+        headers: { authorization: `Bearer ${userToken({ email: BOB, scope: 'mcp:tool1' })}`, 'x-user-entra-token': bobEntra },
+        body: { prompt: 'Read the customer metrics from app2' }
+      });
+      assert.strictEqual(res.statusCode, 200);
+      assert.strictEqual(res.body.status, 'COMPLETED_SUCCESSFULLY');
+
+      assert.strictEqual(entraParams.length, 1);
+      assert.match(entraParams[0].scope, /\/Mcp\.Storage\.ReadApp2$/);
+      assert.strictEqual(entraParams[0].client_assertion, 'svid.for.api://AzureADTokenExchange');
+      assert.strictEqual(entraParams[0].client_secret, undefined);
+      assert.strictEqual(entraParams[0].assertion, bobEntra);
+
+      const sent = received[0].headers;
+      assert.strictEqual(sent['x-agent-identity'], 'svid.for.azure-mcp-server');
+      assert.match(sent.authorization, /^Bearer h\./);
+      assert.notStrictEqual(sent.authorization, `Bearer ${bobEntra}`, 'the Entra assertion is not forwarded to the MCP');
+      assert.ok(!/eyJ[A-Za-z0-9_-]{5,}\.[A-Za-z0-9_-]{5,}\./.test(JSON.stringify(res.body)));
+    } finally {
+      spy.mock.restore();
+    }
+  });
+
+  test('a step-up challenge reaches the caller as `stepUp` with the claims to satisfy', async () => {
+    const { mock } = require('node:test');
+    const spy = mock.method(tokenExchange, '_callEntraWifTokenExchange', async () => ({ statusCode: 400, body: { error: 'interaction_required', claims: '{"access_token":{"acrs":{"essential":true,"value":"c1"}}}' } }));
+    try {
+      const res = await invokeApp({
+        headers: { authorization: `Bearer ${userToken({ email: BOB, scope: 'mcp:tool1' })}`, 'x-user-entra-token': fakeJwt({ upn: BOB }) },
+        body: { prompt: 'Read the customer metrics from app2' }
+      });
+      assert.strictEqual(res.body.code, 'STEP_UP_REQUIRED');
+      assert.strictEqual(res.body.stepUp.required, true);
+      assert.ok(res.body.stepUp.claims.includes('acrs'));
+    } finally {
+      spy.mock.restore();
+    }
   });
 });
 

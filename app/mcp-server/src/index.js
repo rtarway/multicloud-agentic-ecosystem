@@ -5,6 +5,7 @@ const express = require('express');
 const DeclarativeEngine = require('./declarativeEngine');
 const { verifyOboToken } = require('./auth');
 const { assertStartupSafe } = require('./simulation');
+const { hasFederatedSource } = require('./federatedAssertion');
 
 const app = express();
 app.use(express.json());
@@ -160,7 +161,11 @@ app.post('/api/tools/:name', async (req, res) => {
 // Start Server if invoked directly
 if (require.main === module) {
   assertStartupSafe('azure-mcp-server', {
-    realModeBlockers: process.env.SPIRE_OIDC_ISSUER ? [] : ['SPIRE_OIDC_ISSUER is not set (the calling agent cannot be verified)']
+    realModeBlockers: [
+      ...(process.env.SPIRE_OIDC_ISSUER ? [] : ['SPIRE_OIDC_ISSUER is not set (the calling agent cannot be verified)']),
+      ...(hasFederatedSource() ? [] : ['no federated credential source (managed identity IDENTITY_ENDPOINT/IDENTITY_HEADER or AZURE_FEDERATED_TOKEN_FILE) for the storage on-behalf-of exchange']),
+      ...(process.env.ENTRA_TENANT_ID && process.env.ENTRA_CLIENT_ID ? [] : ['ENTRA_TENANT_ID and ENTRA_CLIENT_ID are not set'])
+    ]
   });
   app.listen(PORT, () => {
     console.log(`===========================================================`);

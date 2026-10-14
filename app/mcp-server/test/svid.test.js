@@ -21,7 +21,7 @@ const entraToken = (claims = {}) => jwtUtil.signRS256({
   tid: '81f26b58-159c-4879-80a0-bab30b5b4dd3',
   aud: 'api://d5850aa0-a667-41c3-8dd0-16f2dee4da25',
   sub: 'bob@rtarwaygmail.onmicrosoft.com', upn: 'bob@rtarwaygmail.onmicrosoft.com',
-  appid: ORCH_APP, scp: 'user_impersonation', roles: ['regular-user'],
+  appid: ORCH_APP, scp: 'Mcp.Storage.ReadApp1',
   ...claims
 }, jwtUtil.getAzureTestKey(), { kid: 'azure-test-key-1', expiresInSeconds: 300 });
 

@@ -14,7 +14,8 @@ declare -A TARGETS=(
   [simulation.js]="agent-orchestrator gcp-mcp-server mcp-server web-frontend"
   [demoKeys.js]="agent-orchestrator gcp-mcp-server mcp-server web-frontend"
   [redact.js]="agent-orchestrator web-frontend"
-  [identityMapping.js]="agent-orchestrator gcp-mcp-server mcp-server"
+  [identityMapping.js]="agent-orchestrator gcp-mcp-server mcp-server web-frontend"
+  [azureScopes.js]="agent-orchestrator mcp-server"
   [oidc.js]="agent-orchestrator gcp-mcp-server mcp-server web-frontend"
   [spiffe.js]="agent-orchestrator gcp-mcp-server mcp-server"
 )

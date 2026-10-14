@@ -234,6 +234,16 @@ Goal: the same test users, groups and roles exist in Keycloak, Entra and Google,
 5. Remove string-matched authorization and the "allow if no `azp`/`act`" clause (T3, Z4).
 6. Storage hardening: disable shared key, restrict public network access, enable diagnostic logs (Z5). CI: GitHub OIDC instead of `AZURE_CREDENTIALS`; add or remove the missing `foundry-deploy.sh` (Z6).
 
+**Status: implemented (Phase 3), verified offline only.**
+
+- Orchestrator authenticates to Entra with a client assertion signed as the SPIRE JWT-SVID (audience `api://AzureADTokenExchange`); the Azure MCP uses its managed identity (or a workload-identity token file). No Entra client secret remains anywhere.
+- The BFF signs the user in to Entra (public client, auth code + PKCE, `login_hint` from the directory-mapped UPN, same-person check). The Entra token stays server-side in the session; the browser never supplies it in OIDC mode. Step-up (claims challenge) surfaces as `STEP_UP_REQUIRED` and a banner.
+- OBO to the Azure MCP uses per-call fine-grained scopes `Mcp.Storage.{Read|Write}{App1|App2}`; the MCP then does a second OBO to `https://storage.azure.com` and calls Blob with the user's own token, so Azure RBAC decides. Blob names are validated; string-matched authorization and the "allow if no azp/act" clause are gone; app-only tokens are rejected.
+- Demo profile only: RBAC is emulated from the identity directory (`azure_roles`), never from names/emails. `Mail.Send` is a separate permission gated behind `grant_mail_send`.
+- Storage hardening: shared key off, no public blob, default network action Deny (+ `allowed_ip_ranges`), diagnostic logs to Log Analytics, SPIRE OIDC documents moved to a separate public storage account. CI uses GitHub OIDC (`vars.AZURE_DEPLOY_ENABLED`), `foundry-deploy.sh` reference replaced by `deploy-azure-mcp.sh`; `setup-entra-wif.sh` is deprecated.
+- Defaults chosen: `manage_entra_apps` stays off by default; BFF refresh tokens live in server memory (lost on restart; the vault comes in Phase 5).
+- Not verified live: Entra apps/consent/federated credentials, OBO and claims challenges against a real tenant, SPIRE issuer reachability, Blob RBAC. Terraform `entra` and `azure` roots were only `validate`d. With shared key disabled and network Deny, the Terraform runner needs a data-plane role and its IP in `allowed_ip_ranges`, as does the MCP's outbound IP.
+
 ### Phase 4: Google Cloud (1-2 weeks)
 
 1. **Retire** the workload identity pool, provider, service-account impersonation binding and user principal grants in `terraform/gcp/main.tf` and `setup-gcp-wif.sh` (G1, G2).

@@ -7,8 +7,8 @@ version: "2026-07-15"
 tools:
   - name: "tool1"
     title: "Storage Read/Write Tool for App1 and App2"
-    description: "Allows reading and writing blobs in Azure Storage containers app1 and app2. Permitted for regular users and administrators with mcp:tool1 scope."
-    required_scope: "mcp:tool1"
+    description: "Allows reading and writing blobs in Azure Storage containers app1 and app2. Each call needs the matching delegated scope (Mcp.Storage.ReadApp1/ReadApp2/WriteApp1/WriteApp2) and the user's own Azure RBAC role on the container."
+    # Entra delegated scope required per call: Mcp.Storage.{Read|Write}{App1|App2} (derived from action and container)
     target_backend: "azure_storage"
     allowed_containers:
       - "app1"
@@ -51,8 +51,8 @@ tools:
 
   - name: "tool2"
     title: "Auditing & Read-Only Tool for App1"
-    description: "Provides read-only access strictly to the app1 container for system audits and management. Restricted to administrators with mcp:tool2 scope."
-    required_scope: "mcp:tool2"
+    description: "Provides read-only access strictly to the app1 container for system audits and management. Needs the delegated scope Mcp.Storage.ReadApp1 and the user's own Azure RBAC role on app1."
+    # Entra delegated scope required per call: Mcp.Storage.ReadApp1
     target_backend: "azure_storage"
     allowed_containers:
       - "app1"

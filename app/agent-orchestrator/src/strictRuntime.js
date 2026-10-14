@@ -15,6 +15,10 @@ function realModeBlockers(env = process.env, fileExists = fs.existsSync) {
   if (!config.identityMapPath || !fileExists(config.identityMapPath)) blockers.push('IDENTITY_MAP_PATH does not point to an identity map file');
   if (!env.ORCHESTRATOR_CLIENT_SECRET) blockers.push('ORCHESTRATOR_CLIENT_SECRET is not set (token exchange at the IdP cannot authenticate)');
   if (!fileExists(env.SPIRE_AGENT_SOCKET || DEFAULT_SOCKET)) blockers.push('the SPIRE agent socket is not available (no workload identity)');
+  // No built-in tenant or application ids in real mode: the Azure path must be configured explicitly
+  for (const name of ['ENTRA_TENANT_ID', 'ENTRA_AGENT_CLIENT_ID', 'ENTRA_MCP_APP_ID']) {
+    if (!env[name]) blockers.push(`${name} is not set (Azure on-behalf-of exchange)`);
+  }
   return blockers;
 }
 

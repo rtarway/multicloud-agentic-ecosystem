@@ -60,51 +60,76 @@
       "id": "agent-bigquery-audit",
       "agent_scopes": [
         "mcp:bigquery:audit"
-      ]
+      ],
+      "azure_roles": []
     },
     {
       "id": "agent-bigquery-query",
       "agent_scopes": [
         "mcp:bigquery:query"
-      ]
+      ],
+      "azure_roles": []
     },
     {
       "id": "agent-mail-send",
       "agent_scopes": [
         "Mail.Send"
-      ]
+      ],
+      "azure_roles": []
     },
     {
       "id": "agent-tool1",
       "agent_scopes": [
         "mcp:tool1"
-      ]
+      ],
+      "azure_roles": []
     },
     {
       "id": "agent-tool2",
       "agent_scopes": [
         "mcp:tool2"
-      ]
+      ],
+      "azure_roles": []
     },
     {
       "id": "azure-app1-readers",
-      "agent_scopes": []
+      "agent_scopes": [],
+      "azure_roles": [
+        {
+          "container": "app1",
+          "role": "Storage Blob Data Reader"
+        }
+      ]
     },
     {
       "id": "azure-app2-contributors",
-      "agent_scopes": []
+      "agent_scopes": [],
+      "azure_roles": [
+        {
+          "container": "app2",
+          "role": "Storage Blob Data Contributor"
+        }
+      ]
     },
     {
       "id": "azure-app2-readers",
-      "agent_scopes": []
+      "agent_scopes": [],
+      "azure_roles": [
+        {
+          "container": "app2",
+          "role": "Storage Blob Data Reader"
+        }
+      ]
     },
     {
       "id": "bigquery-analytics-viewers",
-      "agent_scopes": []
+      "agent_scopes": [],
+      "azure_roles": []
     },
     {
       "id": "bigquery-audit-viewers",
-      "agent_scopes": []
+      "agent_scopes": [],
+      "azure_roles": []
     }
   ]
 }

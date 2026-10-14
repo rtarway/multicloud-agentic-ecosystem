@@ -188,51 +188,28 @@ async function verifyOboToken(authHeader, ignoredDelegatedHeader, agentIdentityH
     }
     console.log(`[MCP-AUTH] ✅ RFC 8693 Actor chain cryptographically verified: [${(actorChain.length ? actorChain : [tokenAzp || 'authorized-agent']).join(' -> ')}]`);
 
-    // 3. Scopes & App Roles resolution (Entra ID emits App Roles in decoded.roles, or Delegated Scopes in decoded.scp)
-    let scopes = [];
-    if (typeof decoded.scope === 'string') {
-      scopes = decoded.scope.split(' ').filter(Boolean);
-    } else if (typeof decoded.scp === 'string') {
-      scopes = decoded.scp.split(' ').filter(Boolean);
-    } else if (Array.isArray(decoded.roles)) {
-      scopes = decoded.roles.filter(r => r.startsWith('mcp:') || r === 'Mail.Send');
-    } else if (Array.isArray(decoded.scopes)) {
-      scopes = decoded.scopes;
+    // 3. Delegated scopes. Only a token issued on behalf of a signed-in user is accepted: it carries the scopes the user's
+    //    session was granted in `scp` (for example Mcp.Storage.ReadApp1). App-only tokens (roles, no scp) are refused, and
+    //    nothing about the user's name or roles widens the scopes.
+    if (decoded.idtyp === 'app' || typeof decoded.scp !== 'string' || !decoded.scp.trim()) {
+      return {
+        authenticated: false,
+        error: 'A delegated user token with an scp claim is required; app-only tokens are not accepted.'
+      };
     }
+    const scopes = decoded.scp.split(' ').filter(Boolean);
+    const roles = Array.isArray(decoded.roles) ? decoded.roles : [];
+    console.log(`[MCP-AUTH] ✅ Delegated scopes: [${scopes.join(', ')}]`);
 
-    // If scopes not directly mapped, check role entitlements
-    const roles = Array.isArray(decoded.roles)
-      ? decoded.roles
-      : (decoded.realm_access?.roles || []);
-
-    // In Entra ID Native OBO, scp is 'user_impersonation' representing full delegated execution
-    if (scopes.includes('user_impersonation')) {
-      // If delegated user is admin/auditor or token specifies tool2, grant tool1 and tool2
-      const userIdent = decoded.upn || decoded.unique_name || decoded.email || decoded.sub || '';
-      if (roles.includes('admin') || roles.includes('Tool2.Audit') || roles.includes('auditor') || userIdent.includes('alice') || userIdent.includes('charlie')) {
-        if (!scopes.includes('mcp:tool1')) scopes.push('mcp:tool1');
-        if (!scopes.includes('mcp:tool2')) scopes.push('mcp:tool2');
-      } else {
-        if (!scopes.includes('mcp:tool1')) scopes.push('mcp:tool1');
-      }
-    } else if (scopes.length === 0) {
-      if (roles.includes('admin') || roles.includes('Tool2.Audit')) {
-        scopes = ['mcp:tool1', 'mcp:tool2'];
-      } else {
-        scopes = ['mcp:tool1'];
-      }
-    }
-    console.log(`[MCP-AUTH] ✅ App roles & scopes resolved: [${scopes.join(', ')}]`);
-
-    // 4. Resolve Delegated Human User Principal (from the verified token only)
-    const userUpn = decoded.upn || decoded.unique_name || decoded.email || decoded.sub || 'anonymous-user';
+    // 4. Resolve the delegated human user (from the verified token only)
+    const userUpn = decoded.upn || decoded.preferred_username || decoded.unique_name || decoded.email || decoded.sub || 'anonymous-user';
     const delegatedUser = {
       sub: userUpn,
       email: userUpn,
       oid: decoded.oid || null,
       roles: roles
     };
-    console.log(`[MCP-AUTH] ✅ Delegated user principal: sub='${delegatedUser.sub}', email='${delegatedUser.email}', roles=[${delegatedUser.roles.join(', ')}]`);
+    console.log(`[MCP-AUTH] ✅ Delegated user principal: sub='${delegatedUser.sub}', oid='${delegatedUser.oid}'`);
 
     const agentSpiffeId = actorSub || (tokenAzp ? `entra://${tokenAzp}` : 'spiffe://example.org/ns/agent-system/sa/orchestrator-sa');
 
@@ -245,6 +222,7 @@ async function verifyOboToken(authHeader, ignoredDelegatedHeader, agentIdentityH
       act: decoded.act || { sub: agentSpiffeId },
       actorChain: actorChain.length ? actorChain : [agentSpiffeId],
       scopes: scopes,
+      oid: delegatedUser.oid,
       roles: delegatedUser.roles,
       tokenPayload: decoded,
       rawToken: token

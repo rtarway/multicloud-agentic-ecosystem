@@ -4,6 +4,7 @@
 // Demo profile: tokens are signed with locally generated demo keys and storage may use its in-memory fixture.
 process.env.ALLOW_SIMULATION = 'true';
 process.env.STORAGE_OFFLINE = 'true';
+process.env.IDENTITY_MAP_PATH = require('path').resolve(__dirname, '../../../identity/identity-map.json');
 
 const { test, describe } = require('node:test');
 const assert = require('node:assert');
@@ -13,25 +14,27 @@ const app = require('../src/index');
 
 const azureTestKey = jwtUtil.getAzureTestKey();
 
-function mintOboToken({ sub, actSub, scopes, roles }) {
+const ORCH_APP = 'a23206e1-2dda-4854-aac7-0536d2da2c4c';
+const ORCH_SPIFFE = 'spiffe://example.org/ns/agent-system/sa/orchestrator-sa';
+const ALICE = 'alice@rtarwaygmail.onmicrosoft.com';
+const BOB = 'bob@rtarwaygmail.onmicrosoft.com';
+const CHARLIE = 'charlie@rtarwaygmail.onmicrosoft.com';
+
+// An Entra-shaped, user-delegated token for the Azure MCP server, signed with the demo key
+function mintOboToken({ upn, actSub, scp, appid = ORCH_APP, extra = {} }) {
   const payload = {
     iss: 'https://login.microsoftonline.com/81f26b58-159c-4879-80a0-bab30b5b4dd3/v2.0',
     tid: '81f26b58-159c-4879-80a0-bab30b5b4dd3',
     aud: 'api://d5850aa0-a667-41c3-8dd0-16f2dee4da25',
-    sub,
-    email: sub,
-    appid: 'a23206e1-2dda-4854-aac7-0536d2da2c4c',
-    roles: roles || (sub?.includes('alice') ? ['auditor', 'Storage Blob Data Reader'] : ['regular-user']),
-    act: {
-      sub: actSub || 'spiffe://example.org/ns/agent-system/sa/orchestrator-sa'
-    },
-    scope: Array.isArray(scopes) ? scopes.join(' ') : scopes
+    sub: `entra-sub-${upn}`,
+    oid: `oid-${upn}`,
+    upn,
+    appid,
+    scp: Array.isArray(scp) ? scp.join(' ') : scp,
+    ...(actSub ? { act: { sub: actSub } } : {}),
+    ...extra
   };
-
-  if (azureTestKey) {
-    return jwtUtil.signRS256(payload, azureTestKey, { kid: 'azure-test-key-1', expiresInSeconds: 300 });
-  }
-  return jwtUtil.sign(payload, TEST_SECRET, { expiresInSeconds: 300 });
+  return jwtUtil.signRS256(payload, azureTestKey, { kid: 'azure-test-key-1', expiresInSeconds: 300 });
 }
 
 function invokeApp(appInstance, { method = 'POST', url = '/mcp', headers = {}, body = null }) {
@@ -108,6 +111,8 @@ async function rpcRequest(method, params, token, extraHeaders = {}) {
 }
 
 describe('Azure Low-Code MCP Server Tests (Protocol Spec July 2026)', () => {
+  const call = (token, args, tool = 'tool1', headers = {}) => rpcRequest('tools/call', { name: tool, arguments: args }, token, headers);
+
   test('MCP initialize handshake negotiates protocol version 2026-07-15', async () => {
     const res = await rpcRequest('initialize', { protocolVersion: '2026-07-15' });
     assert.strictEqual(res.jsonrpc, '2.0');
@@ -118,331 +123,205 @@ describe('Azure Low-Code MCP Server Tests (Protocol Spec July 2026)', () => {
 
   test('MCP tools/list returns declarative tools (tool1 and tool2)', async () => {
     const res = await rpcRequest('tools/list', {});
-    assert.strictEqual(res.jsonrpc, '2.0');
     assert.ok(Array.isArray(res.result.tools));
     assert.strictEqual(res.result.tools.length, 2);
-
     const toolNames = res.result.tools.map(t => t.name);
-    assert.ok(toolNames.includes('tool1'), 'Must include tool1');
-    assert.ok(toolNames.includes('tool2'), 'Must include tool2');
-  });
-
-  test('Regular User (Bob): Tool-level RBAC passes (mcp:tool1), but Cloud IAM denies storage access (HTTP 403 / AuthorizationPermissionMismatch)', async () => {
-    const bobToken = mintOboToken({
-      sub: 'bob@example.com',
-      actSub: 'spiffe://example.org/ns/agent-system/sa/orchestrator-sa',
-      scopes: ['mcp:tool1'],
-      roles: ['regular-user'] // Bob has NO storage RBAC role
-    });
-
-    // 1. Read app1 -> Fails at Layer 2 Cloud Native IAM
-    const readRes = await rpcRequest(
-      'tools/call',
-      {
-        name: 'tool1',
-        arguments: { container: 'app1', action: 'read', filename: 'financial-report.json' }
-      },
-      bobToken
-    );
-
-    assert.strictEqual(readRes.result.isError, true);
-    assert.strictEqual(readRes.result.cloudIAMDecision, 'DENIED_BY_AZURE_STORAGE_IAM');
-    assert.ok(readRes.result.content[0].text.includes('Azure Storage Cloud IAM Access Denied (HTTP 403)'));
-    assert.strictEqual(readRes.result.audit.decision, 'DENIED_BY_AZURE_STORAGE_IAM');
-  });
-
-  test('Regular User (Bob): Fails tool2 with native MCP Error (isError: true, lacks mcp:tool2)', async () => {
-    // Bob has only mcp:tool1 scope
-    const bobToken = mintOboToken({
-      sub: 'bob@example.com',
-      actSub: 'spiffe://example.org/ns/agent-system/sa/orchestrator-sa',
-      scopes: ['mcp:tool1']
-    });
-
-    const res = await rpcRequest(
-      'tools/call',
-      {
-        name: 'tool2',
-        arguments: { container: 'app1', action: 'read', filename: 'financial-report.json' }
-      },
-      bobToken
-    );
-
-    // Native MCP error handling (instead of raw 403)
-    assert.strictEqual(res.result.isError, true);
-    assert.ok(res.result.content[0].text.includes('MCP Authorization Denied'));
-    assert.ok(res.result.content[0].text.includes("lacks required scope 'mcp:tool2'"));
-    assert.strictEqual(res.result.audit.decision, 'DENIED_BY_POLICY');
-    assert.strictEqual(res.result.audit.principal, 'bob@example.com');
-    assert.strictEqual(res.result.audit.actingAgent, 'spiffe://example.org/ns/agent-system/sa/orchestrator-sa');
-  });
-
-  test('Administrator (Alice): Can execute both tool1 and tool2', async () => {
-    // Alice has both mcp:tool1 and mcp:tool2
-    const aliceToken = mintOboToken({
-      sub: 'alice@example.com',
-      actSub: 'spiffe://example.org/ns/agent-system/sa/orchestrator-sa',
-      scopes: ['mcp:tool1', 'mcp:tool2']
-    });
-
-    // tool1
-    const res1 = await rpcRequest(
-      'tools/call',
-      {
-        name: 'tool1',
-        arguments: { container: 'app2', action: 'read', filename: 'customer-metrics.json' }
-      },
-      aliceToken
-    );
-    assert.strictEqual(res1.result.isError, false);
-
-    // tool2 (restricted to app1 read-only)
-    const res2 = await rpcRequest(
-      'tools/call',
-      {
-        name: 'tool2',
-        arguments: { container: 'app1', action: 'read', filename: 'compliance.txt' }
-      },
-      aliceToken
-    );
-    assert.strictEqual(res2.result.isError, false);
-    assert.ok(res2.result.content[0].text.includes('ISO27001'));
-  });
-
-  test('Tool2 rejects write attempts or invalid container (strictly app1 read-only)', async () => {
-    const aliceToken = mintOboToken({
-      sub: 'alice@example.com',
-      scopes: ['mcp:tool1', 'mcp:tool2']
-    });
-
-    // Try write on tool2
-    const writeRes = await rpcRequest(
-      'tools/call',
-      {
-        name: 'tool2',
-        arguments: { container: 'app1', action: 'write', filename: 'test.txt' }
-      },
-      aliceToken
-    );
-    assert.strictEqual(writeRes.result.isError, true);
-    assert.ok(writeRes.result.content[0].text.includes("Invalid parameter 'action'"));
-
-    // Try app2 on tool2
-    const app2Res = await rpcRequest(
-      'tools/call',
-      {
-        name: 'tool2',
-        arguments: { container: 'app2', action: 'read', filename: 'test.txt' }
-      },
-      aliceToken
-    );
-    assert.strictEqual(app2Res.result.isError, true);
-    assert.ok(app2Res.result.content[0].text.includes("Invalid parameter 'container'"));
+    assert.ok(toolNames.includes('tool1') && toolNames.includes('tool2'));
   });
 
   test('Missing Authorization header returns MCP authentication error', async () => {
-    const res = await rpcRequest('tools/call', {
-      name: 'tool1',
-      arguments: { container: 'app1', action: 'read', filename: 'config.yaml' }
-    });
-
+    const res = await call(null, { container: 'app1', action: 'read', filename: 'config.yaml' });
     assert.strictEqual(res.result.isError, true);
     assert.ok(res.result.content[0].text.includes('MCP Authentication Failure'));
   });
 
+  // ---- delegated scope per operation ----
+
+  test('A token without the exact delegated scope is refused by the MCP layer (Bob has only ReadApp2)', async () => {
+    const bob = mintOboToken({ upn: BOB, actSub: ORCH_SPIFFE, scp: ['Mcp.Storage.ReadApp2'] });
+    const res = await call(bob, { container: 'app1', action: 'read', filename: 'financial-report.json' });
+    assert.strictEqual(res.result.isError, true);
+    assert.ok(res.result.content[0].text.includes("lacks required scope 'Mcp.Storage.ReadApp1'"));
+    assert.strictEqual(res.result.audit.decision, 'DENIED_BY_POLICY');
+    assert.strictEqual(res.result.audit.requiredScope, 'Mcp.Storage.ReadApp1');
+    assert.strictEqual(res.result.audit.principal, BOB);
+    assert.strictEqual(res.result.audit.actingAgent, ORCH_SPIFFE);
+  });
+
+  test('Read and write need different scopes: ReadApp2 does not allow a write to app2', async () => {
+    const bob = mintOboToken({ upn: BOB, scp: ['Mcp.Storage.ReadApp2'] });
+    const res = await call(bob, { container: 'app2', action: 'write', filename: 'agent-notes.txt', content: 'x' });
+    assert.strictEqual(res.result.isError, true);
+    assert.strictEqual(res.result.audit.requiredScope, 'Mcp.Storage.WriteApp2');
+  });
+
+  test('The legacy broad user_impersonation scope grants nothing', async () => {
+    const token = mintOboToken({ upn: ALICE, scp: ['user_impersonation'] });
+    const res = await call(token, { container: 'app2', action: 'read', filename: 'customer-metrics.json' });
+    assert.strictEqual(res.result.isError, true);
+    assert.strictEqual(res.result.audit.decision, 'DENIED_BY_POLICY');
+  });
+
+  test('App-only tokens (roles, no scp) are rejected', async () => {
+    const token = mintOboToken({ upn: ALICE, scp: undefined, extra: { roles: ['Mcp.Storage.ReadApp1'], idtyp: 'app' } });
+    const res = await call(token, { container: 'app1', action: 'read', filename: 'financial-report.json' });
+    assert.strictEqual(res.result.isError, true);
+    assert.ok(res.result.content[0].text.includes('delegated user token'));
+  });
+
+  // ---- Azure RBAC decides (emulated from the identity directory in the demo profile) ----
+
+  test('Scope is not enough: Bob holds ReadApp1 but has no Azure role on app1 -> 403 from storage', async () => {
+    const bob = mintOboToken({ upn: BOB, actSub: ORCH_SPIFFE, scp: ['Mcp.Storage.ReadApp1'] });
+    const res = await call(bob, { container: 'app1', action: 'read', filename: 'financial-report.json' });
+    assert.strictEqual(res.result.isError, true);
+    assert.strictEqual(res.result.cloudIAMDecision, 'DENIED_BY_AZURE_STORAGE_IAM');
+    assert.ok(res.result.content[0].text.includes('Azure Storage Cloud IAM Access Denied (HTTP 403)'));
+    assert.strictEqual(res.result.audit.decision, 'DENIED_BY_AZURE_STORAGE_IAM');
+  });
+
+  test('Alice (Reader on app1 and app2) can read both containers, tool1 and tool2', async () => {
+    const alice = mintOboToken({ upn: ALICE, actSub: ORCH_SPIFFE, scp: ['Mcp.Storage.ReadApp1', 'Mcp.Storage.ReadApp2'] });
+    const r1 = await call(alice, { container: 'app2', action: 'read', filename: 'customer-metrics.json' });
+    assert.strictEqual(r1.result.isError, false);
+    const r2 = await call(alice, { container: 'app1', action: 'read', filename: 'compliance.txt' }, 'tool2');
+    assert.strictEqual(r2.result.isError, false);
+    assert.ok(r2.result.content[0].text.includes('ISO27001'));
+  });
+
+  test('Write needs a Contributor role too: Alice holds WriteApp2 but is only a Reader -> 403; Bob (Contributor on app2) may write', async () => {
+    const alice = mintOboToken({ upn: ALICE, scp: ['Mcp.Storage.WriteApp2'] });
+    const denied = await call(alice, { container: 'app2', action: 'write', filename: 'notes.txt', content: 'x' });
+    assert.strictEqual(denied.result.isError, true);
+    assert.strictEqual(denied.result.cloudIAMDecision, 'DENIED_BY_AZURE_STORAGE_IAM');
+
+    const bob = mintOboToken({ upn: BOB, scp: ['Mcp.Storage.WriteApp2', 'Mcp.Storage.WriteApp1'] });
+    const ok = await call(bob, { container: 'app2', action: 'write', filename: 'agent-notes.txt', content: 'hello' });
+    assert.strictEqual(ok.result.isError, false);
+    const wrongContainer = await call(bob, { container: 'app1', action: 'write', filename: 'agent-notes.txt', content: 'hello' });
+    assert.strictEqual(wrongContainer.result.cloudIAMDecision, 'DENIED_BY_AZURE_STORAGE_IAM');
+  });
+
+  test('Nothing is decided from names: a look-alike user with every scope but no directory entry is denied', async () => {
+    const mallory = mintOboToken({ upn: 'alice@evil.example', scp: ['Mcp.Storage.ReadApp1', 'Mcp.Storage.ReadApp2', 'Mcp.Storage.WriteApp1', 'Mcp.Storage.WriteApp2'] });
+    const res = await call(mallory, { container: 'app1', action: 'read', filename: 'financial-report.json' });
+    assert.strictEqual(res.result.isError, true);
+    assert.strictEqual(res.result.cloudIAMDecision, 'DENIED_BY_AZURE_STORAGE_IAM');
+  });
+
+  test('Charlie (Reader on both, no write role) cannot write even with the write scope', async () => {
+    const charlie = mintOboToken({ upn: CHARLIE, scp: ['Mcp.Storage.WriteApp1'] });
+    const res = await call(charlie, { container: 'app1', action: 'write', filename: 'notes.txt', content: 'x' });
+    assert.strictEqual(res.result.cloudIAMDecision, 'DENIED_BY_AZURE_STORAGE_IAM');
+  });
+
+  // ---- declarative constraints ----
+
+  test('Tool2 rejects write attempts or invalid container (strictly app1 read-only)', async () => {
+    const alice = mintOboToken({ upn: ALICE, scp: ['Mcp.Storage.ReadApp1', 'Mcp.Storage.ReadApp2', 'Mcp.Storage.WriteApp1'] });
+    const writeRes = await call(alice, { container: 'app1', action: 'write', filename: 'test.txt' }, 'tool2');
+    assert.strictEqual(writeRes.result.isError, true);
+    assert.ok(writeRes.result.content[0].text.includes("Invalid parameter 'action'"));
+    const app2Res = await call(alice, { container: 'app2', action: 'read', filename: 'test.txt' }, 'tool2');
+    assert.strictEqual(app2Res.result.isError, true);
+    assert.ok(app2Res.result.content[0].text.includes("Invalid parameter 'container'"));
+  });
+
+  test('Blob names are single safe path segments: traversal and separators are rejected', async () => {
+    const alice = mintOboToken({ upn: ALICE, scp: ['Mcp.Storage.ReadApp1', 'Mcp.Storage.ReadApp2'] });
+    for (const filename of ['../app2/customer-metrics.json', 'a/b.json', '..\\x.json', '.hidden.json', 'x'.repeat(200) + '.json', 'bad name.json']) {
+      const res = await call(alice, { container: 'app1', action: 'read', filename });
+      assert.strictEqual(res.result.isError, true, filename);
+      assert.ok(res.result.content[0].text.includes("Invalid parameter 'filename'"), filename);
+    }
+  });
+
   test('FGP in tools.yaml: Denies write to compliance or audit files (in-process FGP)', async () => {
-    const token = mintOboToken({
-      sub: 'alice@example.com',
-      scopes: ['mcp:tool1']
-    });
-
-    const res = await rpcRequest(
-      'tools/call',
-      {
-        name: 'tool1',
-        arguments: { container: 'app1', action: 'write', filename: 'compliance-bypass.txt', content: 'fake' }
-      },
-      token
-    );
-
+    const token = mintOboToken({ upn: ALICE, scp: ['Mcp.Storage.WriteApp1'] });
+    const res = await call(token, { container: 'app1', action: 'write', filename: 'compliance-bypass.txt', content: 'fake' });
     assert.strictEqual(res.result.isError, true);
     assert.ok(res.result.content[0].text.includes('immutable and cannot be overwritten'));
     assert.strictEqual(res.result.audit.decision, 'DENIED_BY_FGP');
   });
 
   test('FGP in tools.yaml: Denies unsupported file extension (.exe)', async () => {
-    const token = mintOboToken({
-      sub: 'alice@example.com',
-      scopes: ['mcp:tool1']
-    });
-
-    const res = await rpcRequest(
-      'tools/call',
-      {
-        name: 'tool1',
-        arguments: { container: 'app1', action: 'read', filename: 'malicious.exe' }
-      },
-      token
-    );
-
+    const token = mintOboToken({ upn: ALICE, scp: ['Mcp.Storage.ReadApp1'] });
+    const res = await call(token, { container: 'app1', action: 'read', filename: 'malicious.exe' });
     assert.strictEqual(res.result.isError, true);
     assert.ok(res.result.content[0].text.includes('Only .json, .txt, and .yaml files are permitted'));
     assert.strictEqual(res.result.audit.decision, 'DENIED_BY_FGP');
   });
 
-  test('JIT User Delegation: Operation dynamically mints 60s JIT credential with SHA-256 chain fingerprint binding', async () => {
-    const token = mintOboToken({
-      sub: 'alice@example.com',
-      scopes: ['mcp:tool1'],
-      roles: ['auditor', 'Storage Blob Data Reader']
-    });
-
-    const res = await rpcRequest(
-      'tools/call',
-      {
-        name: 'tool1',
-        arguments: { container: 'app1', action: 'read', filename: 'financial-report.json' }
-      },
-      token
-    );
-
-    assert.strictEqual(res.result.isError, false);
-    const parsedData = JSON.parse(res.result.content[0].text);
-    assert.ok(parsedData.data.delegationMeta, 'Response must include JIT delegation metadata');
-    assert.strictEqual(parsedData.data.delegationMeta.credentialType, 'JIT_USER_DELEGATION_CREDENTIAL');
-    assert.strictEqual(parsedData.data.delegationMeta.permissions, 'r');
-    assert.strictEqual(parsedData.data.delegationMeta.ttlSeconds, 60);
-    assert.ok(parsedData.data.delegationMeta.chainFingerprint);
-    assert.ok(parsedData.data.delegationMeta.correlationId);
+  test('FGP: tool2 cannot read credential-like files', async () => {
+    const token = mintOboToken({ upn: ALICE, scp: ['Mcp.Storage.ReadApp1'] });
+    const res = await call(token, { container: 'app1', action: 'read', filename: 'secret-key.json' }, 'tool2');
+    assert.strictEqual(res.result.audit.decision, 'DENIED_BY_FGP');
   });
 
+  // ---- access record (no pseudo "JIT delegation") ----
+
+  test('The result records how storage was accessed: the user\'s own identity, decided by RBAC; no minted credential', async () => {
+    const token = mintOboToken({ upn: ALICE, actSub: ORCH_SPIFFE, scp: ['Mcp.Storage.ReadApp1'] });
+    const res = await call(token, { container: 'app1', action: 'read', filename: 'financial-report.json' });
+    assert.strictEqual(res.result.isError, false);
+    const parsed = JSON.parse(res.result.content[0].text);
+    const meta = parsed.data.accessMeta;
+    assert.ok(meta, 'accessMeta present');
+    assert.strictEqual(meta.permissions, 'r');
+    assert.strictEqual(meta.userUpn, ALICE);
+    assert.ok(meta.correlationId);
+    assert.ok(/EMULATED_RBAC/.test(meta.credentialType), 'the demo profile says it is emulated');
+    assert.strictEqual(parsed.data.delegationMeta, undefined);
+    assert.ok(!JSON.stringify(parsed).includes('JIT_USER_DELEGATION'));
+    assert.strictEqual(parsed.audit.authorizedScope, 'Mcp.Storage.ReadApp1');
+  });
+
+  // ---- caller-supplied identity and delegation chain ----
+
   test('RFC 8693 Cryptographic Delegation Chain: Rejects tokens with untrusted or rogue actors', async () => {
-    const rogueToken = azureTestKey
-      ? jwtUtil.signRS256(
-          {
-            iss: 'https://login.microsoftonline.com/81f26b58-159c-4879-80a0-bab30b5b4dd3/v2.0',
-            tid: '81f26b58-159c-4879-80a0-bab30b5b4dd3',
-            aud: 'api://d5850aa0-a667-41c3-8dd0-16f2dee4da25',
-            sub: 'alice@example.com',
-            email: 'alice@example.com',
-            appid: 'a23206e1-2dda-4854-aac7-0536d2da2c4c',
-            roles: ['auditor', 'Storage Blob Data Reader'],
-            act: {
-              sub: 'spiffe://rogue-cluster.evil.com/ns/hack/sa/rogue-pod'
-            },
-            scope: 'mcp:tool1'
-          },
-          azureTestKey,
-          { kid: 'azure-test-key-1', expiresInSeconds: 300 }
-        )
-      : mintOboToken({
-          sub: 'alice@example.com',
-          actSub: 'spiffe://rogue-cluster.evil.com/ns/hack/sa/rogue-pod',
-          scopes: ['mcp:tool1']
-        });
-
-    const res = await rpcRequest(
-      'tools/call',
-      {
-        name: 'tool1',
-        arguments: { container: 'app1', action: 'read', filename: 'financial-report.json' }
-      },
-      rogueToken
-    );
-
+    const rogue = mintOboToken({ upn: ALICE, actSub: 'spiffe://rogue-cluster.evil.com/ns/hack/sa/rogue-pod', scp: ['Mcp.Storage.ReadApp1'] });
+    const res = await call(rogue, { container: 'app1', action: 'read', filename: 'financial-report.json' });
     assert.strictEqual(res.result.isError, true);
     assert.ok(res.result.content[0].text.includes('RFC 8693 Cryptographic chain verification failed'));
   });
 
-  test('Azure WIF & Entra ID Protection: Validates Microsoft Entra token; the user comes from the token, never from X-Delegated-Identity', async () => {
-    const entraTokenPayload = {
-      iss: 'https://login.microsoftonline.com/81f26b58-159c-4879-80a0-bab30b5b4dd3/v2.0',
-      tid: '81f26b58-159c-4879-80a0-bab30b5b4dd3',
-      aud: 'api://d5850aa0-a667-41c3-8dd0-16f2dee4da25',
-      sub: 'bob@example.com',
-      upn: 'bob@example.com',
-      appid: 'a23206e1-2dda-4854-aac7-0536d2da2c4c',
-      roles: ['regular-user'],
-      scope: 'mcp:tool1'
-    };
-    const entraToken = jwtUtil.signRS256(entraTokenPayload, azureTestKey, { kid: 'azure-test-key-1', expiresInSeconds: 300 });
-
-    // A caller tries to impersonate Alice through the legacy identity header
-    const forgedHeader = JSON.stringify({
-      sub: 'alice@example.com',
-      email: 'alice@example.com',
-      roles: ['admin', 'auditor', 'Storage Blob Data Reader']
-    });
-
-    const res = await rpcRequest(
-      'tools/call',
-      {
-        name: 'tool1',
-        arguments: { container: 'app1', action: 'read', filename: 'financial-report.json' }
-      },
-      entraToken,
-      { 'x-delegated-identity': forgedHeader }
-    );
-
-    // Bob (token identity) has no role on app1: the forged header must not grant Alice's access
+  test('The user comes from the token; a forged X-Delegated-Identity header grants nothing', async () => {
+    const bob = mintOboToken({ upn: BOB, scp: ['Mcp.Storage.ReadApp1'] });
+    const forged = JSON.stringify({ sub: ALICE, email: ALICE, roles: ['admin', 'Storage Blob Data Reader'] });
+    const res = await call(bob, { container: 'app1', action: 'read', filename: 'financial-report.json' }, 'tool1', { 'x-delegated-identity': forged });
     assert.strictEqual(res.result.isError, true);
-    assert.ok(!JSON.stringify(res.result).includes('alice@example.com'));
+    assert.strictEqual(res.result.audit.principal, BOB);
+    assert.ok(!JSON.stringify(res.result).includes(ALICE));
   });
 
   test('Audience is mandatory and compared exactly', async () => {
-    const base = {
-      iss: 'https://login.microsoftonline.com/81f26b58-159c-4879-80a0-bab30b5b4dd3/v2.0',
-      tid: '81f26b58-159c-4879-80a0-bab30b5b4dd3',
-      sub: 'alice@example.com',
-      upn: 'alice@example.com',
-      appid: 'a23206e1-2dda-4854-aac7-0536d2da2c4c',
-      scope: 'mcp:tool1',
-      act: { sub: 'spiffe://example.org/ns/agent-system/sa/orchestrator-sa' }
-    };
-    const call = async payload => rpcRequest(
-      'tools/call',
-      { name: 'tool1', arguments: { container: 'app1', action: 'read', filename: 'financial-report.json' } },
-      jwtUtil.signRS256(payload, azureTestKey, { kid: 'azure-test-key-1', expiresInSeconds: 300 })
-    );
-
-    const noAud = await call(base);
-    assert.strictEqual(noAud.result.isError, true);
-    assert.ok(noAud.result.content[0].text.includes('aud claim is required'));
-
-    const wrongAud = await call({ ...base, aud: 'api://attacker-app' });
-    assert.strictEqual(wrongAud.result.isError, true);
-    assert.ok(wrongAud.result.content[0].text.includes('audience verification failed'));
+    const base = { upn: ALICE, scp: ['Mcp.Storage.ReadApp1'] };
+    const noAud = mintOboToken({ ...base, extra: { aud: undefined } });
+    const r1 = await call(noAud, { container: 'app1', action: 'read', filename: 'financial-report.json' });
+    assert.ok(r1.result.content[0].text.includes('aud claim is required'));
+    const wrong = mintOboToken({ ...base, extra: { aud: 'api://attacker-app' } });
+    const r2 = await call(wrong, { container: 'app1', action: 'read', filename: 'financial-report.json' });
+    assert.ok(r2.result.content[0].text.includes('audience verification failed'));
   });
 
   test('Issuer must match the configured tenant exactly (lookalike microsoftonline hosts rejected)', async () => {
-    const token = jwtUtil.signRS256({
-      iss: 'https://login.microsoftonline.com.attacker.example/81f26b58-159c-4879-80a0-bab30b5b4dd3/v2.0',
-      tid: '81f26b58-159c-4879-80a0-bab30b5b4dd3',
-      aud: 'api://d5850aa0-a667-41c3-8dd0-16f2dee4da25',
-      sub: 'alice@example.com',
-      appid: 'a23206e1-2dda-4854-aac7-0536d2da2c4c',
-      scope: 'mcp:tool1'
-    }, azureTestKey, { kid: 'azure-test-key-1', expiresInSeconds: 300 });
-    const res = await rpcRequest('tools/call', { name: 'tool1', arguments: { container: 'app1', action: 'read', filename: 'financial-report.json' } }, token);
-    assert.strictEqual(res.result.isError, true);
+    const token = mintOboToken({ upn: ALICE, scp: ['Mcp.Storage.ReadApp1'], extra: { iss: 'https://login.microsoftonline.com.attacker.example/81f26b58-159c-4879-80a0-bab30b5b4dd3/v2.0' } });
+    const res = await call(token, { container: 'app1', action: 'read', filename: 'financial-report.json' });
     assert.ok(res.result.content[0].text.includes('issuer verification failed'));
   });
 
-  test('Without simulation: local demo-signed tokens are rejected and no storage fixture is served', async () => {
+  test('Without simulation: demo-signed tokens are rejected and no storage fixture is served', async () => {
     const previousSim = process.env.ALLOW_SIMULATION;
-    const previousOffline = process.env.STORAGE_OFFLINE;
     process.env.ALLOW_SIMULATION = 'false';
     try {
-      const token = mintOboToken({ sub: 'alice@example.com', scopes: ['mcp:tool1'] });
-      const res = await rpcRequest('tools/call', { name: 'tool1', arguments: { container: 'app1', action: 'read', filename: 'financial-report.json' } }, token);
+      const token = mintOboToken({ upn: ALICE, scp: ['Mcp.Storage.ReadApp1'] });
+      const res = await call(token, { container: 'app1', action: 'read', filename: 'financial-report.json' });
       assert.strictEqual(res.result.isError, true);
-
       const storage = require('../src/azureStorage');
       await assert.rejects(() => storage.listBlobs('app1'), err => err.code === 'SIMULATION_DISABLED');
       assert.strictEqual(require('../src/jwtUtil').getAzureTestKey(), null);
     } finally {
       process.env.ALLOW_SIMULATION = previousSim;
-      process.env.STORAGE_OFFLINE = previousOffline;
     }
   });
 });

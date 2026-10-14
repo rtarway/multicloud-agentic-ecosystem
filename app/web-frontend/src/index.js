@@ -8,6 +8,8 @@ const jwtUtil = require('./jwtUtil');
 const { isSimulation, getDemoSecret, assertStartupSafe } = require('./simulation');
 const { redactDeep } = require('./redact');
 const { readLoginConfig, createOidcLogin } = require('./oidcLogin');
+const { readEntraConfig, createEntraLogin } = require('./entraLogin');
+const { createResolver } = require('./identityMapping');
 
 const app = express();
 app.use(express.json());
@@ -32,6 +34,22 @@ app.get('/healthz', (req, res) => {
 const loginConfig = readLoginConfig();
 app.locals.oidcLogin = loginConfig ? createOidcLogin({ config: loginConfig }) : null;
 
+// ---- Entra sign-in for the same user (needed for Azure tools) ----
+const entraConfig = readEntraConfig();
+app.locals.entraLogin = entraConfig && app.locals.oidcLogin ? createEntraLogin({ config: entraConfig }) : null;
+app.locals.identityResolver = process.env.IDENTITY_MAP_PATH ? createResolver(process.env.IDENTITY_MAP_PATH) : null;
+
+/** The Entra identity the directory maps the signed-in IdP user to, or null (fail closed). */
+function expectedEntraUpn(session) {
+  const resolver = app.locals.identityResolver;
+  if (!resolver) return null;
+  try {
+    return resolver.requireEntraUpn(resolver.resolveFromClaims({ email: session.email, email_verified: session.emailVerified === true }));
+  } catch {
+    return null;
+  }
+}
+
 function authMode() {
   if (app.locals.oidcLogin) return 'oidc';
   return isSimulation() ? 'demo' : 'none';
@@ -54,6 +72,26 @@ app.post('/auth/logout', (req, res) => {
   return login.logout(req, res);
 });
 
+app.get('/auth/entra/login', (req, res) => {
+  const entra = app.locals.entraLogin;
+  const login = app.locals.oidcLogin;
+  if (!entra || !login) return res.status(503).json({ error: 'ENTRA_LOGIN_DISABLED', message: 'Entra sign-in is not configured.' });
+  const session = login.getSession(req);
+  if (!session) return res.redirect(302, '/auth/login');
+  const upn = expectedEntraUpn(session);
+  if (!upn) return res.status(403).json({ error: 'NO_ENTRA_IDENTITY', message: 'The directory has no Azure identity for this user.' });
+  return entra.start(req, res, { session, expectedUpn: upn });
+});
+
+app.get('/auth/entra/callback', async (req, res) => {
+  const entra = app.locals.entraLogin;
+  const login = app.locals.oidcLogin;
+  if (!entra || !login) return res.status(503).json({ error: 'ENTRA_LOGIN_DISABLED' });
+  const session = login.getSession(req);
+  if (!session) return res.redirect(302, '/auth/login');
+  return entra.callback(req, res, { session });
+});
+
 // What the browser may know: the auth mode and, when signed in, the user's identity and consented scopes (no tokens).
 app.get('/api/session', (req, res) => {
   const mode = authMode();
@@ -63,7 +101,8 @@ app.get('/api/session', (req, res) => {
     mode,
     authenticated: Boolean(session),
     signInUrl: login ? '/auth/login' : null,
-    user: session ? login.sessionInfo(session) : null
+    user: session ? login.sessionInfo(session) : null,
+    entra: app.locals.entraLogin ? { ...app.locals.entraLogin.info(session), signInUrl: '/auth/entra/login' } : { configured: false }
   });
 });
 
@@ -271,7 +310,7 @@ app.post('/api/login', requireDemoLogin, async (req, res) => {
 // Proxy Chat/Prompt to Agent Orchestrator
 app.post('/api/chat', async (req, res) => {
   const { prompt, userEntraToken, entraToken } = req.body || {};
-  const activeEntraToken = userEntraToken || entraToken || req.headers['x-user-entra-token'] || null;
+  let entraAssertion = null;
 
   if (!prompt) {
     return res.status(400).json({ error: 'Missing prompt.' });
@@ -287,12 +326,16 @@ app.post('/api/chat', async (req, res) => {
     if (!session) return res.status(401).json({ error: 'NOT_SIGNED_IN', signInUrl: '/auth/login' });
     token = await login.accessTokenFor(session);
     if (!token) return res.status(401).json({ error: 'SESSION_EXPIRED', signInUrl: '/auth/login' });
+    // The Entra assertion comes from the server-side session only; one supplied by the browser is ignored.
+    entraAssertion = app.locals.entraLogin ? await app.locals.entraLogin.accessTokenFor(session) : null;
   } else if (isSimulation()) {
     token = (req.body && req.body.token) || (req.headers.authorization ? req.headers.authorization.replace(/^Bearer\s+/i, '') : null);
+    entraAssertion = userEntraToken || entraToken || req.headers['x-user-entra-token'] || null;
   } else {
     return res.status(503).json({ error: 'LOGIN_DISABLED', message: 'No login is configured and the demo profile is off.' });
   }
 
+  const activeEntraToken = entraAssertion;
   const payload = JSON.stringify({
     prompt,
     userEntraToken: activeEntraToken,

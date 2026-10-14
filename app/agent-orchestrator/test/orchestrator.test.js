@@ -259,7 +259,8 @@ describe('A2A Agent Orchestrator & Token Exchange Tests', () => {
     const exchangeResult = await tokenExchange.exchangeToken({
       userToken: bobKeycloakToken,
       agentSvid: { spiffeId: 'spiffe://example.org/ns/agent-system/sa/orchestrator-sa' },
-      requestedTool: 'tool1'
+      requestedTool: 'tool1',
+      toolArgs: { container: 'app2', action: 'read' }
     });
 
     assert.strictEqual(exchangeResult.claims.sub, 'bob@example.com');
@@ -277,7 +278,8 @@ describe('A2A Agent Orchestrator & Token Exchange Tests', () => {
     const exchangeResult = await tokenExchange.exchangeToken({
       userToken: aliceKeycloakToken,
       agentSvid: { spiffeId: 'spiffe://example.org/ns/agent-system/sa/orchestrator-sa' },
-      requestedTool: 'tool2'
+      requestedTool: 'tool2',
+      toolArgs: { container: 'app1', action: 'read' }
     });
 
     assert.strictEqual(exchangeResult.claims.sub, 'alice@example.com');
@@ -745,7 +747,8 @@ describe('Phase 0: fail-closed identity handling', () => {
       const result = await tokenExchange.exchangeToken({
         userToken: mintKeycloakToken({ sub: 'alice@example.com', roles: ['admin'], scope: 'mcp:tool1' }),
         agentSvid: { spiffeId: 'spiffe://example.org/ns/agent-system/sa/orchestrator-sa' },
-        requestedTool: 'tool1'
+        requestedTool: 'tool1',
+      toolArgs: { container: 'app2', action: 'read' }
       });
       assert.strictEqual(result.isError, true);
       assert.strictEqual(result.code, 'USER_ASSERTION_REQUIRED');
@@ -756,12 +759,13 @@ describe('Phase 0: fail-closed identity handling', () => {
     }
   }));
 
-  test('Azure exchange fails closed when the OBO call cannot be made (assertion present, no client secret)', withoutSimulation(async () => {
+  test('Azure exchange fails closed when the OBO call cannot be made (assertion present, no client assertion source)', withoutSimulation(async () => {
     const result = await tokenExchange.exchangeToken({
       userToken: mintKeycloakToken({ sub: 'alice@example.com', roles: ['admin'], scope: 'mcp:tool1' }),
       userEntraToken: 'header.payload.signature',
       agentSvid: { spiffeId: 'spiffe://example.org/ns/agent-system/sa/orchestrator-sa' },
-      requestedTool: 'tool1'
+      requestedTool: 'tool1',
+      toolArgs: { container: 'app2', action: 'read' }
     });
     assert.strictEqual(result.isError, true);
     assert.strictEqual(result.code, 'ENTRA_OBO_FAILED');

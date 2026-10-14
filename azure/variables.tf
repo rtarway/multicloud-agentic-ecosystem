@@ -16,14 +16,20 @@ variable "storage_account_name" {
   default     = "azwifstoragepoc2026"
 }
 
-variable "spire_oidc_issuer_url" {
+variable "oidc_storage_account_name" {
   type        = string
-  description = "Publicly accessible SPIRE OIDC Discovery Issuer URL (Azure Blob Storage hosted)"
-  default     = "https://azwifstoragepoc2026.blob.core.windows.net/spire-oidc"
+  description = "Separate storage account that publishes SPIRE's public OIDC discovery documents"
+  default     = "azwifoidcpoc2026"
 }
 
-variable "spiffe_workload_subject" {
-  type        = string
-  description = "Subject SPIFFE ID for the Agent Orchestrator"
-  default     = "spiffe://example.org/ns/agent-system/sa/orchestrator-sa"
+variable "restrict_network" {
+  type        = bool
+  description = "Deny network access to the data storage account by default (only allow-listed IPs and trusted Azure services)"
+  default     = true
+}
+
+variable "allowed_ip_ranges" {
+  type        = list(string)
+  description = "Public IPs / CIDRs allowed to reach the data storage account: the machine running Terraform and the Azure MCP App Service's outbound IPs"
+  default     = []
 }

@@ -47,6 +47,9 @@ spec:
             - configMapRef:
                 name: oidc-config
                 optional: true
+            - configMapRef:
+                name: entra-config
+                optional: true
           env:
             - name: PORT
               value: "3001"

@@ -8,6 +8,43 @@
 
   function el(id) { return document.getElementById(id); }
 
+  // ---- Azure (Entra) connection banner ----
+  function showBanner(text, href, label) {
+    let banner = el('entra-banner');
+    if (!banner) {
+      banner = document.createElement('div');
+      banner.id = 'entra-banner';
+      banner.setAttribute('role', 'status');
+      banner.style.cssText = 'margin:12px 0;padding:10px 14px;border:1px solid #f59e0b;border-radius:8px;background:rgba(245,158,11,0.12);font-size:13px;';
+      const dash = el('dashboard-screen');
+      if (dash) dash.insertBefore(banner, dash.firstChild);
+    }
+    banner.textContent = '';
+    banner.appendChild(document.createTextNode(text + ' '));
+    const link = document.createElement('a');
+    link.href = href;
+    link.textContent = label;
+    link.style.fontWeight = '600';
+    banner.appendChild(link);
+    banner.style.display = 'block';
+  }
+
+  function hideBanner() {
+    const banner = el('entra-banner');
+    if (banner) banner.style.display = 'none';
+  }
+
+  // Looks at a chat result: Azure not connected, or Entra wants more proof (MFA / Conditional Access)
+  function inspectChatResult(data) {
+    if (!data || typeof data !== 'object') return;
+    if (data.stepUp && data.stepUp.required) {
+      const q = data.stepUp.claims ? '?claims=' + encodeURIComponent(data.stepUp.claims) : '';
+      showBanner('Azure needs additional verification (for example MFA) before this action.', '/auth/entra/login' + q, 'Verify and retry');
+    } else if (data.code === 'USER_ASSERTION_REQUIRED' || (data.mcpResponse && data.mcpResponse.audit && data.mcpResponse.audit.code === 'USER_ASSERTION_REQUIRED')) {
+      showBanner('Connect your Azure account to use Azure tools.', '/auth/entra/login', 'Connect Azure');
+    }
+  }
+
   function showSignIn() {
     const grid = document.querySelector('.persona-grid');
     if (grid) grid.style.display = 'none';
@@ -72,7 +109,10 @@
         delete parsed.userEntraToken;
         body = JSON.stringify(parsed);
       } catch (e) { /* leave body as is */ }
-      return originalFetch(url, Object.assign({}, options, { headers, body, credentials: 'same-origin' }));
+      return originalFetch(url, Object.assign({}, options, { headers, body, credentials: 'same-origin' })).then(res => {
+        res.clone().json().then(inspectChatResult).catch(() => { /* not JSON */ });
+        return res;
+      });
     }
     return originalFetch(url, options);
   };
@@ -81,7 +121,16 @@
     .then(r => r.json())
     .then(s => {
       if (s.mode !== 'oidc') return; // demo persona login stays as it is
-      if (s.authenticated) enterDashboard(s.user); else showSignIn();
+      if (s.authenticated) {
+        enterDashboard(s.user);
+        if (s.entra && s.entra.configured && !s.entra.connected) {
+          showBanner('Azure is not connected yet.', s.entra.signInUrl || '/auth/entra/login', 'Connect Azure');
+        } else {
+          hideBanner();
+        }
+      } else {
+        showSignIn();
+      }
     })
     .catch(() => { /* leave the page as is */ });
 })();

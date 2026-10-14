@@ -99,7 +99,9 @@ function buildMap(doc) {
     })).sort((a, b) => a.id.localeCompare(b.id)),
     groups: doc.groups.map(g => ({
       id: g.id,
-      agent_scopes: [...(g.agent_scopes || [])].sort()
+      agent_scopes: [...(g.agent_scopes || [])].sort(),
+      // Azure RBAC the group holds; used only to EMULATE Azure Storage RBAC in the demo profile (Azure itself decides in real mode)
+      azure_roles: (g.azure_roles || []).map(r => ({ container: r.container, role: r.role }))
     })).sort((a, b) => a.id.localeCompare(b.id))
   };
 }

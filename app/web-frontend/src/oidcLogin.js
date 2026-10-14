@@ -131,6 +131,7 @@ function createOidcLogin({ config, fetchImpl = fetch, jwks, now = Date.now }) {
       createdAt: now(),
       lastSeen: now(),
       email: idClaims.email,
+      emailVerified: idClaims.email_verified === true,
       name: idClaims.name || idClaims.preferred_username || idClaims.email,
       username: idClaims.preferred_username || idClaims.email,
       accessToken: tokens.access_token,

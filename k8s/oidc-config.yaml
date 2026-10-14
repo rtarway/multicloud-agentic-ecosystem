@@ -11,6 +11,6 @@ data:
   OIDC_JWKS_URI: "http://keycloak-service.keycloak.svc.cluster.local:8080/realms/azure-wif-realm/protocol/openid-connect/certs"
   OIDC_TOKEN_ENDPOINT: "http://keycloak-service.keycloak.svc.cluster.local:8080/realms/azure-wif-realm/protocol/openid-connect/token"
   # SPIRE's published OIDC discovery (must be reachable from the pods and from Azure); see scripts/publish-spire-oidc.sh
-  SPIRE_OIDC_ISSUER: "https://azwifstoragepoc2026.blob.core.windows.net/spire-oidc"
+  SPIRE_OIDC_ISSUER: "https://azwifoidcpoc2026.blob.core.windows.net/spire-oidc"
   # Identity directory generated from identity/users.yaml and mounted from the identity-map ConfigMap
   IDENTITY_MAP_PATH: "/etc/identity/identity-map.json"

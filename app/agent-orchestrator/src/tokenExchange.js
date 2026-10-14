@@ -8,6 +8,7 @@ const querystring = require('querystring');
 const jwtUtil = require('./jwtUtil');
 const { isSimulation } = require('./simulation');
 const { ExchangeError } = require('./idpExchange');
+const { storageScope, ScopeError } = require('./azureScopes');
 
 // Load .env if present
 try {
@@ -28,7 +29,6 @@ try {
 // Azure Configurations
 const ENTRA_TENANT_ID = process.env.ENTRA_TENANT_ID || '81f26b58-159c-4879-80a0-bab30b5b4dd3';
 const ENTRA_AGENT_CLIENT_ID = process.env.ENTRA_AGENT_CLIENT_ID || 'a23206e1-2dda-4854-aac7-0536d2da2c4c';
-const ENTRA_CLIENT_SECRET = process.env.ENTRA_CLIENT_SECRET;
 const ENTRA_MCP_APP_ID = process.env.ENTRA_MCP_APP_ID || 'd5850aa0-a667-41c3-8dd0-16f2dee4da25';
 const ENTRA_AUDIENCE = process.env.ENTRA_AUDIENCE || `api://${ENTRA_MCP_APP_ID}`;
 
@@ -44,6 +44,20 @@ const GCP_SERVICE_ACCOUNT = process.env.GCP_SERVICE_ACCOUNT || `gcp-mcp-sa@${GCP
 
 
 class TokenExchangeEngine {
+  /**
+   * Source of the client assertion the orchestrator's Entra application authenticates with: a JWT-SVID issued by SPIRE
+   * for the Entra federated-credential audience. There is no client secret anywhere.
+   */
+  setClientAssertionProvider(provider) {
+    this.clientAssertionProvider = provider || null;
+  }
+
+  async _clientAssertion() {
+    if (this.clientAssertionProvider) return this.clientAssertionProvider();
+    const spireClient = require('./spireClient');
+    return (await spireClient.fetchJwtSvid('api://AzureADTokenExchange')).token;
+  }
+
   /** Injects the IdP exchange client (created at startup from the environment, or a fake in tests). */
   setIdpClient(client) {
     this.idpClient = client || null;
@@ -88,6 +102,18 @@ class TokenExchangeEngine {
       req.write(postData);
       req.end();
     });
+  }
+
+  _entraFailure(code, message, { userEmail, agentSpiffeId, requestedTool, requiredScopeForTool, claimsChallenge = null }) {
+    return {
+      isError: true,
+      status: code === 'STEP_UP_REQUIRED' ? 'STEP_UP_REQUIRED' : 'EXCHANGE_FAILED',
+      code,
+      error: message,
+      tokenType: 'TOKEN_EXCHANGE_FAILED',
+      ...(claimsChallenge ? { claimsChallenge } : {}),
+      audit: { subject: userEmail, actor: agentSpiffeId, requestedTool, requiredScope: requiredScopeForTool, decision: code === 'STEP_UP_REQUIRED' ? 'STEP_UP_REQUIRED' : 'EXCHANGE_FAILED', code }
+    };
   }
 
   /**
@@ -174,7 +200,7 @@ class TokenExchangeEngine {
   /**
    * Executes Multi-Cloud RFC 8693 Token Exchange with Multi-Hop Lineage and Scope Downscoping
    */
-  async exchangeToken({ userToken, verifiedUser = null, userEntraToken, agentSvid, targetAudience = ENTRA_AUDIENCE, requestedTool = 'tool1', priorHops = [], turn = 1 }) {
+  async exchangeToken({ userToken, verifiedUser = null, userEntraToken, agentSvid, targetAudience = ENTRA_AUDIENCE, requestedTool = 'tool1', toolArgs = {}, priorHops = [], turn = 1 }) {
     // verifiedUser is present in strict mode (user token verified against the IdP and mapped through the directory)
     const strict = Boolean(verifiedUser);
     // 1. Validate & Parse Subject Token (User from Keycloak or incoming Entra user token)
@@ -391,56 +417,90 @@ class TokenExchangeEngine {
       };
     }
 
-    // 4. Microsoft Entra ID On-Behalf-Of exchange.
-    // Only a real user assertion plus the confidential-client secret can produce a real OBO token. There is no
-    // password-grant or client-credentials fallback: a missing assertion would silently turn a user-delegated
-    // call into an app-only one.
+    // 4. Microsoft Entra ID On-Behalf-Of exchange, for exactly the delegated scope this call needs.
+    //    - Storage tools: the Azure MCP server's own fine-grained scope, e.g. api://<mcp>/Mcp.Storage.ReadApp1
+    //    - Mail: Microsoft Graph Mail.Send
+    //    The orchestrator authenticates with a SPIFFE JWT-SVID as the client assertion (no client secret), and there is no
+    //    password-grant or client-credentials fallback: a missing assertion would silently turn a user-delegated call
+    //    into an app-only one.
+    const isGraph = requiredScopeForTool === 'Mail.Send';
+    let entraScope;
+    try {
+      entraScope = isGraph
+        ? 'https://graph.microsoft.com/Mail.Send'
+        : `api://${ENTRA_MCP_APP_ID}/${storageScope(requestedTool === 'tool2' ? 'read' : (toolArgs.action || 'read'), requestedTool === 'tool2' ? 'app1' : toolArgs.container)}`;
+    } catch (err) {
+      if (!(err instanceof ScopeError)) throw err;
+      return this._entraFailure('INVALID_STORAGE_REQUEST', err.message, { userEmail, agentSpiffeId, requestedTool, requiredScopeForTool });
+    }
+    const entraScopeName = entraScope.split('/').pop();
+
     let liveEntraToken = null;
     const assertionToken = userEntraToken || null;
     let oboFailure = null;
+    let failureCode = assertionToken ? 'ENTRA_OBO_FAILED' : 'USER_ASSERTION_REQUIRED';
+    let claimsChallenge = null;
 
-    if (assertionToken && ENTRA_CLIENT_SECRET) {
+    // The Entra user must be the same person as the authenticated IdP user (guards against attaching someone else's token)
+    if (assertionToken && strict) {
+      const assertionClaims = jwtUtil.decode(assertionToken) || {};
+      const assertionUser = String(assertionClaims.upn || assertionClaims.preferred_username || '').toLowerCase();
+      if (assertionUser !== verifiedUser.identity.entraUpn) {
+        return this._entraFailure('ENTRA_IDENTITY_MISMATCH', 'The Entra assertion belongs to a different user than the authenticated session.', { userEmail, agentSpiffeId, requestedTool, requiredScopeForTool });
+      }
+    }
+
+    if (assertionToken) {
       try {
-        console.log(`[ORCH-OBO] Requesting Microsoft Entra ID OBO token (audience: ${targetAudience}, subject: ${userEmail}, actor: ${agentSpiffeId})`);
+        console.log(`[ORCH-OBO] Requesting Microsoft Entra ID OBO token (scope: ${entraScopeName}, subject: ${userEmail}, actor: ${agentSpiffeId})`);
         const entraResponse = await this._callEntraWifTokenExchange({
           grant_type: 'urn:ietf:params:oauth:grant-type:jwt-bearer',
           client_id: ENTRA_AGENT_CLIENT_ID,
-          client_secret: ENTRA_CLIENT_SECRET,
+          client_assertion_type: 'urn:ietf:params:oauth:client-assertion-type:jwt-bearer',
+          client_assertion: await this._clientAssertion(),
           assertion: assertionToken,
-          scope: `api://${ENTRA_MCP_APP_ID}/user_impersonation`,
+          scope: entraScope,
           requested_token_use: 'on_behalf_of'
         });
         console.log(`[ORCH-OBO] Entra ID token response: HTTP ${entraResponse.statusCode}`);
-        if (entraResponse.statusCode === 200 && entraResponse.body && entraResponse.body.access_token) {
-          liveEntraToken = entraResponse.body.access_token;
+        const body = entraResponse.body && typeof entraResponse.body === 'object' ? entraResponse.body : {};
+        if (entraResponse.statusCode === 200 && body.access_token) {
+          liveEntraToken = body.access_token;
+        } else if (body.claims && (body.error === 'interaction_required' || body.error === 'invalid_grant')) {
+          failureCode = 'STEP_UP_REQUIRED';
+          claimsChallenge = body.claims;
+          oboFailure = 'Entra requires additional user interaction (for example MFA) before this action.';
         } else {
-          oboFailure = `Entra OBO exchange failed (HTTP ${entraResponse.statusCode}${entraResponse.body && entraResponse.body.error ? `: ${entraResponse.body.error}` : ''}).`;
+          oboFailure = `Entra OBO exchange failed (HTTP ${entraResponse.statusCode}${body.error ? `: ${body.error}` : ''}).`;
         }
       } catch (err) {
         oboFailure = `Entra OBO exchange failed: ${err.message}`;
       }
-    } else if (!assertionToken) {
-      oboFailure = 'A user Entra assertion is required for the on-behalf-of exchange.';
     } else {
-      oboFailure = 'ENTRA_CLIENT_SECRET is not configured for the on-behalf-of exchange.';
+      oboFailure = 'A user Entra assertion is required for the on-behalf-of exchange.';
+    }
+
+    // Verify what Entra returned: right resource, the requested delegated scope, and the same user.
+    if (liveEntraToken) {
+      const claims = jwtUtil.decode(liveEntraToken) || {};
+      const aud = String(claims.aud || '');
+      const audienceOk = isGraph
+        ? ['https://graph.microsoft.com', 'https://graph.microsoft.com/', '00000003-0000-0000-c000-000000000000'].includes(aud)
+        : [ENTRA_MCP_APP_ID, `api://${ENTRA_MCP_APP_ID}`].includes(aud);
+      const scopeOk = String(claims.scp || '').split(' ').includes(entraScopeName);
+      const tokenUser = String(claims.upn || claims.preferred_username || '').toLowerCase();
+      const userOk = !strict || !tokenUser || tokenUser === verifiedUser.identity.entraUpn;
+      if (!audienceOk || !scopeOk || !userOk) {
+        liveEntraToken = null;
+        failureCode = 'ENTRA_TOKEN_INVALID';
+        oboFailure = !userOk ? 'The Entra token is for a different user than the authenticated session.'
+          : !audienceOk ? `The Entra token audience '${aud}' is not the expected resource.`
+            : `The Entra token does not carry the requested delegated scope '${entraScopeName}'.`;
+      }
     }
 
     if (!liveEntraToken && (strict || !isSimulation())) {
-      return {
-        isError: true,
-        status: 'EXCHANGE_FAILED',
-        code: assertionToken ? 'ENTRA_OBO_FAILED' : 'USER_ASSERTION_REQUIRED',
-        error: `${oboFailure} Refusing to fall back to an app-only or locally signed token.`,
-        tokenType: 'TOKEN_EXCHANGE_FAILED',
-        audit: {
-          subject: userEmail,
-          actor: agentSpiffeId,
-          requestedTool,
-          requiredScope: requiredScopeForTool,
-          decision: 'EXCHANGE_FAILED',
-          code: assertionToken ? 'ENTRA_OBO_FAILED' : 'USER_ASSERTION_REQUIRED'
-        }
-      };
+      return this._entraFailure(failureCode, `${oboFailure} Refusing to fall back to an app-only or locally signed token.`, { userEmail, agentSpiffeId, requestedTool, requiredScopeForTool, claimsChallenge });
     }
 
     // 5. Build Entra ID RFC 8693 Token Claims (RS256 PKI - Never Symmetric HMAC)
@@ -455,7 +515,7 @@ class TokenExchangeEngine {
       appid: ENTRA_AGENT_CLIENT_ID,
       azp: ENTRA_AGENT_CLIENT_ID,
       roles: finalScopes,
-      scp: 'user_impersonation',
+      scp: entraScopeName,
       scope: finalScopes.join(' '),
       act: recursiveAct,
       actorChain,

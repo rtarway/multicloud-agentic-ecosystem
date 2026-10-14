@@ -211,7 +211,8 @@ function exchangeFailureResponse(exchange) {
     isError: true,
     cloudIAMDecision: exchange.code || 'EXCHANGE_FAILED',
     content: [{ type: 'text', text: `Token Exchange ${isPolicyDenial ? 'Policy Denial' : 'Failure'}: ${exchange.error}` }],
-    audit: exchange.audit
+    audit: exchange.audit,
+    ...(exchange.claimsChallenge ? { stepUp: { required: true, claims: exchange.claimsChallenge } } : {})
   };
 }
 
@@ -341,7 +342,7 @@ app.post('/api/agent/chat', async (req, res) => {
           reason: opaResult.reason
         },
         hop4_storageDelegation: {
-          name: 'Hop 4: JIT User-Delegation Token (Not Minted)',
+          name: 'Hop 4: User-delegated Storage access (Not Evaluated)',
           status: 'NOT_EVALUATED'
         }
       },
@@ -372,6 +373,7 @@ app.post('/api/agent/chat', async (req, res) => {
       agentSvid,
       targetAudience: entraAudience,
       requestedTool: step1.tool,
+      toolArgs: step1.arguments,
       turn: 1
     });
     const step1CorrelationId = 'chain-cross-step1-' + (userClaims.email || userClaims.sub || 'user').replace(/[^a-zA-Z0-9]/g, '-') + '-' + crypto.randomUUID().substring(0, 8);
@@ -591,7 +593,7 @@ app.post('/api/agent/chat', async (req, res) => {
       hop4_azureExecution: {
         name: 'Hop 4: Azure Storage Execution Result',
         cloud: 'Azure',
-        credentialType: 'Azure Storage JIT User-Delegation (60s)',
+        credentialType: 'Entra OBO user token -> Azure RBAC',
         ttlSeconds: 60,
         status: step1Status,
         resource: '/app1/financial-report.json',
@@ -605,7 +607,7 @@ app.post('/api/agent/chat', async (req, res) => {
       hop4_storageDelegation: {
         name: 'Hop 4: Azure Storage Execution Result',
         cloud: 'Azure',
-        credentialType: 'Azure Storage JIT User-Delegation (60s)',
+        credentialType: 'Entra OBO user token -> Azure RBAC',
         ttlSeconds: 60,
         status: step1Status,
         resource: '/app1/financial-report.json',
@@ -716,6 +718,7 @@ app.post('/api/agent/chat', async (req, res) => {
         finalStatus: halted ? 'FAILED_POLICY_CHECK' : 'COMPLETED_SUCCESSFULLY'
       },
       hopToHop: finalHopToHop,
+      stepUp: halted ? (finalError && finalError.stepUp) : undefined,
       mcpResponse: halted ? finalError : {
         isError: false,
         content: [{ type: 'text', text: step3Redaction ? step3Redaction.redactedReport : 'Cross-cloud pipeline finished successfully.' }]
@@ -741,7 +744,8 @@ app.post('/api/agent/chat', async (req, res) => {
       userEntraToken: activeEntraAssertion,
       agentSvid,
       targetAudience: entraAudience,
-      requestedTool: step1.tool
+      requestedTool: step1.tool,
+      toolArgs: step1.arguments
     });
     const step1CorrelationId = 'chain-step1-' + (userClaims.email || userClaims.sub || 'user').replace(/[^a-zA-Z0-9]/g, '-') + '-' + crypto.randomUUID().substring(0, 8);
     const step1McpRes = step1Exchange.isError ? exchangeFailureResponse(step1Exchange) : await callMcpServer(
@@ -803,7 +807,8 @@ app.post('/api/agent/chat', async (req, res) => {
         userEntraToken: activeEntraAssertion,
         agentSvid,
         targetAudience: entraAudience,
-        requestedTool: step2.tool
+        requestedTool: step2.tool,
+        toolArgs: step2.arguments
       });
       const step2CorrelationId = 'chain-step2-' + (userClaims.email || userClaims.sub || 'user').replace(/[^a-zA-Z0-9]/g, '-') + '-' + crypto.randomUUID().substring(0, 8);
       step2McpRes = step2Exchange.isError ? exchangeFailureResponse(step2Exchange) : await callMcpServer(
@@ -1100,8 +1105,8 @@ app.post('/api/agent/chat', async (req, res) => {
         fullTokenClaims: step1Exchange.claims
       },
       hop4_storageDelegation: {
-        name: 'Hop 4: JIT Storage Execution Result (MCP ➔ Azure Storage)',
-        credentialType: (step1McpRes?.isError || step2McpRes?.isError) ? 'Cloud IAM / Policy Denial' : 'Azure Storage JIT Access (app1 & app2)',
+        name: 'Hop 4: Storage Execution Result (MCP ➔ Azure Storage)',
+        credentialType: (step1McpRes?.isError || step2McpRes?.isError) ? 'Cloud IAM / Policy Denial' : 'Azure Storage as the signed-in user (app1 & app2)',
         ttlSeconds: 60,
         resource: '/app1 & /app2',
         storageAccount: 'azwifstoragepocrt',
@@ -1180,6 +1185,7 @@ app.post('/api/agent/chat', async (req, res) => {
         finalStatus: halted ? 'FAILED_POLICY_CHECK' : 'COMPLETED_SUCCESSFULLY'
       },
       hopToHop: finalHopToHop,
+      stepUp: halted ? (finalError && finalError.stepUp) : undefined,
       mcpResponse: halted ? finalError : (step4DirectRes || { isError: false, content: [{ type: 'text', text: 'Multi-hop autonomous pipeline finished successfully.' }] }),
       status: halted ? 'FAILED_POLICY_CHECK' : 'COMPLETED_SUCCESSFULLY'
     });
@@ -1197,7 +1203,8 @@ app.post('/api/agent/chat', async (req, res) => {
     userEntraToken: activeEntraAssertion,
     agentSvid,
     targetAudience,
-    requestedTool: plan.plannedTool
+    requestedTool: plan.plannedTool,
+    toolArgs: plan.arguments
   });
 
   const targetToken = exchangeResult.exchangedToken || null;
@@ -1248,8 +1255,8 @@ app.post('/api/agent/chat', async (req, res) => {
   try {
     if (mcpResponse?.content?.[0]?.text) {
       const parsedText = JSON.parse(mcpResponse.content[0].text);
-      if (parsedText?.data?.delegationMeta) {
-        storageDelegationDetails = parsedText.data.delegationMeta;
+      if (parsedText?.data?.accessMeta || parsedText?.data?.delegationMeta) {
+        storageDelegationDetails = parsedText.data.accessMeta || parsedText.data.delegationMeta;
       }
     }
   } catch {}
@@ -1301,8 +1308,8 @@ app.post('/api/agent/chat', async (req, res) => {
       fullTokenClaims: decodedObo || { error: exchangeResult.error }
     },
     hop4_storageDelegation: {
-      name: isGcp ? 'Hop 4: Google Cloud BigQuery Execution' : 'Hop 4: JIT User-Delegation Token (MCP Server -> Azure Storage)',
-      credentialType: isGcp ? 'GCP IAM / BigQuery Parameterized Execution' : 'OAuth 2.0 User-Delegation SAS / Bearer (60s JIT)',
+      name: isGcp ? 'Hop 4: Google Cloud BigQuery Execution' : 'Hop 4: User-delegated Storage access (MCP Server -> Azure Storage, Azure RBAC decides)',
+      credentialType: isGcp ? 'GCP IAM / BigQuery Parameterized Execution' : 'Entra OBO Storage token for the signed-in user',
       cloud: isGcp ? 'GCP' : 'Azure',
       ttlSeconds: exchangeResult.isError ? 0 : 60,
       resource: plan.arguments ? (isGcp ? `${plan.arguments.dataset || 'analytics_data'}/${plan.arguments.table || 'regional_sales'}` : `/${plan.arguments.container}/${plan.arguments.filename}`) : undefined,
@@ -1344,6 +1351,7 @@ app.post('/api/agent/chat', async (req, res) => {
     hopToHop,
     plan,
     mcpResponse,
+    stepUp: (mcpResponse && mcpResponse.stepUp) || (exchangeResult.claimsChallenge ? { required: true, claims: exchangeResult.claimsChallenge } : undefined),
     code: exchangeResult.isError ? exchangeResult.code : undefined,
     error: exchangeResult.isError ? exchangeResult.error : undefined,
     status: (exchangeResult.isError || mcpResponse.isError) ? 'FAILED_POLICY_CHECK' : 'COMPLETED_SUCCESSFULLY'

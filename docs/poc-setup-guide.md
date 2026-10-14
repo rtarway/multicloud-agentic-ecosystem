@@ -77,6 +77,14 @@ In the orchestrator/BFF app registration add the web redirect URI `http://localh
 
 Verify: a test user can sign in to `https://myapps.microsoft.com` once and complete MFA registration.
 
+### 3.7 Phase 3 apply order (Azure and Entra)
+1. `terraform -chdir=azure apply -var spire_oidc_issuer_url=<issuer> -var 'allowed_ip_ranges=["<your public IP>"]'` (the storage network default is Deny; include the Terraform runner and the MCP's outbound IPs). Note outputs `mcp_managed_identity_id`, `mcp_managed_identity_client_id`, `mcp_managed_identity_principal_id`, `oidc_issuer_url`. Your own account needs a Blob data-plane role because shared key is disabled.
+2. `./scripts/publish-spire-oidc.sh` (uses the separate account `AZURE_OIDC_STORAGE_ACCOUNT`).
+3. `terraform -chdir=terraform/identity/entra apply -var manage_entra_apps=true -var spire_oidc_issuer_url=<issuer> -var mcp_managed_identity_principal_id=<principal id> ...` (see section 5.3).
+4. `./scripts/sync-entra-config.sh` to create the `entra-config` ConfigMap, then restart the orchestrator and web-frontend.
+5. `AZURE_MCP_IDENTITY_ID=<mcp_managed_identity_id> ./scripts/deploy-azure-mcp.sh`; set App Service settings `ENTRA_CLIENT_ID`, `ENTRA_TENANT_ID`, `AZURE_MI_CLIENT_ID`, `SPIRE_OIDC_ISSUER` (the script sets what it can).
+6. Optional CI deploy: set repository variable `AZURE_DEPLOY_ENABLED=true` and `AZURE_CLIENT_ID/TENANT_ID/SUBSCRIPTION_ID/RESOURCE_GROUP/MCP_IDENTITY_ID`, plus a federated credential for the GitHub repo.
+
 ## 4. Google Cloud (manual parts)
 
 ### 4.1 Project and APIs
@@ -221,6 +229,10 @@ Check before every commit: `git status` shows no `.env*`, `*.tfvars`, `*.pem` or
 | `EXCHANGED_TOKEN_ACTOR` | The `actor-spiffe-id` mapper is missing on the orchestrator client, or `orchestrator_spiffe_id` differs from the SVID's SPIFFE ID |
 | `IDP_EXCHANGE_REJECTED` (HTTP 400/401/403) | `standard.token.exchange.enabled` is off for the orchestrator client, the secret in `orchestrator-oidc` is stale (re-run `sync-orchestrator-secret.sh`), or the subject token does not list the orchestrator in `aud` |
 | `Cannot reach the SPIRE agent` | The SPIFFE CSI volume is not mounted at `/run/spire/sockets`, or the pod has no registration entry (check the SPIRE server's registered entries for the orchestrator service account) |
+| Orchestrator `ENTRA_IDENTITY_MISMATCH` / `ENTRA_USER_MISMATCH` | The Entra account the user signed in with is not the UPN mapped to their Keycloak identity in `identity-map.json` |
+| `STEP_UP_REQUIRED` | Entra returned a claims challenge (MFA, Conditional Access); click Connect Azure / retry in the UI to satisfy it |
+| Azure MCP `403 AuthorizationPermissionMismatch` | The user's Entra group has no Storage role on that container, or the storage firewall blocks the MCP's outbound IP |
+| `CLIENT_ASSERTION_UNAVAILABLE` | Managed identity not assigned to the App Service, or `AZURE_FEDERATED_TOKEN_FILE` / `SPIRE_OIDC_ISSUER` missing |
 | MCP server: `JWT-SVID rejected` | `SPIRE_OIDC_ISSUER` is wrong or unreachable from the pod, or the SVID audience differs from `SVID_AUDIENCE` (`gcp-mcp-server` / `azure-mcp-server`) |
 
 ## 9. Teardown

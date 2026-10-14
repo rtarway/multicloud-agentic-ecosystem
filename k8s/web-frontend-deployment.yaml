@@ -30,6 +30,9 @@ spec:
             - configMapRef:
                 name: oidc-config
                 optional: true
+            - configMapRef:
+                name: entra-config
+                optional: true
           env:
             - name: PORT
               value: "3000"
@@ -58,6 +61,10 @@ spec:
                   name: demo-keys
                   key: DEMO_GOOGLE_PRIVATE_KEY
                   optional: true
+          volumeMounts:
+            - name: identity-map
+              mountPath: /etc/identity
+              readOnly: true
           resources:
             requests:
               cpu: 100m
@@ -71,6 +78,11 @@ spec:
               port: 3000
             initialDelaySeconds: 5
             periodSeconds: 10
+      volumes:
+        - name: identity-map
+          configMap:
+            name: identity-map
+            optional: true
 ---
 apiVersion: v1
 kind: Service
