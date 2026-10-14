@@ -15,6 +15,15 @@ echo "================================================================="
 
 NODE_BIN="$(command -v /usr/local/bin/node || command -v node)"
 
+echo "--> Installing service dependencies (skipped when already present)..."
+# gcp-mcp-server/node_modules is a tracked symlink to mcp-server/node_modules, so mcp-server must be installed first.
+for app in mcp-server agent-orchestrator web-frontend; do
+  if [ ! -d "${ROOT_DIR}/app/${app}/node_modules" ]; then
+    echo "    npm install: app/${app}"
+    (cd "${ROOT_DIR}/app/${app}" && npm install --no-audit --no-fund --loglevel=error)
+  fi
+done
+
 echo "--> 0. Verifying shared helpers are in sync and no secrets are committed..."
 "${ROOT_DIR}/scripts/sync-shared.sh" --check
 "${ROOT_DIR}/scripts/check-no-secrets.sh"
