@@ -4,7 +4,9 @@
   "description": "Multi-Cloud Agentic AI Ecosystem (Azure + GCP) with SPIRE, Istio, RFC 8693 Recursive Multi-Hop Delegated Actor Chains, and Low-Code Declarative MCP Servers",
   "private": true,
   "scripts": {
-    "test": "npm run test:mcp && npm run test:gcp-mcp && npm run test:agent && npm run test:frontend",
+    "test": "npm run test:shared && npm run test:identity && npm run test:mcp && npm run test:gcp-mcp && npm run test:agent && npm run test:frontend",
+    "test:shared": "node --test shared/test/",
+    "test:identity": "node scripts/identity-build-map.js --check && node scripts/identity-check.js && node --test identity/test/",
     "test:mcp": "npm --prefix app/mcp-server test",
     "test:gcp-mcp": "node --test app/gcp-mcp-server/test/gcp-mcp.test.js",
     "test:agent": "npm --prefix app/agent-orchestrator test",

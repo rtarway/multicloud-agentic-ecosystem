@@ -9,6 +9,9 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 ROOT_DIR="$(cd "${SCRIPT_DIR}/.." && pwd)"
 
+# Demo profile: identity providers, SPIRE and cloud IAM are simulated with throwaway in-process keys.
+export ALLOW_SIMULATION=true
+
 echo "================================================================="
 echo " Multi-Cloud Agentic Ecosystem: End-to-End CLI Demo"
 echo " (Azure Storage WIF + GCP BigQuery WIF + RFC 8693 Multi-Hop Chains)"
@@ -22,11 +25,11 @@ const agentApp = require('${ROOT_DIR}/app/agent-orchestrator/src/index');
 const frontendApp = require('${ROOT_DIR}/app/web-frontend/src/index');
 const jwtUtil = require('${ROOT_DIR}/app/agent-orchestrator/src/jwtUtil');
 
-const SECRET = 'demo-obo-token-secret-key-2026';
+const SECRET = require('crypto').randomBytes(32).toString('hex'); // per-run demo secret (never hard-coded)
 
 // Direct in-process wiring for instant, clean CLI demonstration
 agentApp.locals.mcpDispatcher = async (name, args, token) => {
-  const auth = require('${ROOT_DIR}/app/mcp-server/src/auth').verifyOboToken('Bearer ' + token);
+  const auth = await require('${ROOT_DIR}/app/mcp-server/src/auth').verifyOboToken('Bearer ' + token);
   const engine = new (require('${ROOT_DIR}/app/mcp-server/src/declarativeEngine'))();
   return await engine.executeTool(name, args, auth);
 };
@@ -43,8 +46,19 @@ frontendApp.locals.agentDispatcher = async (prompt, token) => {
   const exchange = await require('${ROOT_DIR}/app/agent-orchestrator/src/tokenExchange').exchangeToken({
     userToken: token,
     agentSvid: svid,
-    requestedTool: plan.plannedTool
+    requestedTool: plan.plannedTool,
+    toolArgs: plan.arguments
   });
+
+  if (exchange.isError) {
+    // Token exchange refused (for example RFC 8693 scope escalation): nothing is dispatched downstream
+    return {
+      prompt,
+      oboExchange: { subject: exchange.audit?.subject, actor: exchange.audit?.actor, scopes: 'NONE', actorChain: [] },
+      plan,
+      mcpResponse: { isError: true, content: [{ type: 'text', text: exchange.error }], audit: exchange.audit }
+    };
+  }
 
   const isGcp = plan.cloud === 'GCP' || (plan.plannedTool && plan.plannedTool.startsWith('bigquery_'));
   const mcpRes = isGcp
@@ -113,7 +127,7 @@ async function main() {
   // Azure Scenarios
   await runScenario(
     'Scenario A: Bob (Regular User) - Write status update to Azure app2 (Tool1)',
-    'bob@example.com',
+    'bob@rtarwaygmail.onmicrosoft.com',
     ['regular-user'],
     ['mcp:tool1'],
     'Write new deployment status update to app2'
@@ -121,7 +135,7 @@ async function main() {
 
   await runScenario(
     'Scenario B: Bob (Regular User) - Attempt sensitive audit on Azure app1 (Tool2)',
-    'bob@example.com',
+    'bob@rtarwaygmail.onmicrosoft.com',
     ['regular-user'],
     ['mcp:tool1'],
     'Audit compliance records in app1 using tool2'
@@ -129,7 +143,7 @@ async function main() {
 
   await runScenario(
     'Scenario C: Alice (Admin) - Execute audit on Azure app1 (Tool2)',
-    'alice@example.com',
+    'alice@rtarwaygmail.onmicrosoft.com',
     ['admin'],
     ['mcp:tool1', 'mcp:tool2'],
     'Audit compliance records in app1 using tool2'
@@ -138,7 +152,7 @@ async function main() {
   // GCP BigQuery Scenarios
   await runScenario(
     'Scenario D: Bob (Regular User) - Query GCP BigQuery regional sales telemetry',
-    'bob@example.com',
+    'bob@rtarwaygmail.onmicrosoft.com',
     ['regular-user'],
     ['mcp:tool1', 'mcp:bigquery:query'],
     'Query BigQuery sales in north-america'
@@ -146,7 +160,7 @@ async function main() {
 
   await runScenario(
     'Scenario E: Bob (Regular User) - Attempt BigQuery audit compliance (Tool Denied)',
-    'bob@example.com',
+    'bob@rtarwaygmail.onmicrosoft.com',
     ['regular-user'],
     ['mcp:tool1', 'mcp:bigquery:query'],
     'Run BigQuery audit compliance query'
@@ -154,7 +168,7 @@ async function main() {
 
   await runScenario(
     'Scenario F: Alice (Admin) - Execute BigQuery audit compliance (Allowed)',
-    'alice@example.com',
+    'alice@rtarwaygmail.onmicrosoft.com',
     ['admin', 'BigQuery.Admin'],
     ['mcp:tool1', 'mcp:tool2', 'mcp:bigquery:query', 'mcp:bigquery:audit'],
     'Run BigQuery audit compliance query'
@@ -165,15 +179,15 @@ async function main() {
   console.log('    (Azure Storage -> LLM Turn 2 -> GCP BigQuery -> Redaction)');
   console.log('=============================================================');
 
-  const aliceToken = makeKeycloakToken('alice@example.com', ['admin', 'BigQuery.Admin'], ['mcp:tool1', 'mcp:tool2', 'mcp:bigquery:query', 'mcp:bigquery:audit']);
+  const aliceToken = makeKeycloakToken('alice@rtarwaygmail.onmicrosoft.com', ['admin', 'BigQuery.Admin'], ['mcp:tool1', 'mcp:tool2', 'mcp:bigquery:query', 'mcp:bigquery:audit']);
   
   // Direct invoke of orchestrator chat
   const prompt = 'Correlate Azure financial report from app1 with GCP BigQuery regional sales telemetry';
   const svid = await require('${ROOT_DIR}/app/agent-orchestrator/src/spireClient').fetchJwtSvid();
-  const plan = require('${ROOT_DIR}/app/agent-orchestrator/src/llmSimulator').plan(prompt, { sub: 'alice@example.com' });
+  const plan = require('${ROOT_DIR}/app/agent-orchestrator/src/llmSimulator').plan(prompt, { sub: 'alice@rtarwaygmail.onmicrosoft.com' });
 
   console.log('1. User Initiates Intent: \"' + prompt + '\"');
-  console.log('   * Principal (sub): alice@example.com');
+  console.log('   * Principal (sub): alice@rtarwaygmail.onmicrosoft.com');
   console.log('   * Plan Type:      ' + plan.planType);
   console.log('   * Total Steps:    ' + plan.steps.length);
 
@@ -182,6 +196,7 @@ async function main() {
     userToken: aliceToken,
     agentSvid: svid,
     requestedTool: 'tool1',
+    toolArgs: plan.steps[0].arguments,
     turn: 1
   });
   const t1Res = await agentApp.locals.mcpDispatcher('tool1', plan.steps[0].arguments, t1Exchange.exchangedToken);
@@ -194,6 +209,7 @@ async function main() {
     userToken: aliceToken,
     agentSvid: svid,
     requestedTool: 'bigquery_query_sales',
+    toolArgs: plan.steps[1].arguments,
     priorHops: [{ tool: 'tool1', targetResource: '/app1/financial-report.json', status: 'SUCCESS' }],
     turn: 2
   });
@@ -211,7 +227,7 @@ async function main() {
   const redaction = require('${ROOT_DIR}/app/agent-orchestrator/src/llmSimulator').redactAndSynthesizeMultiCloud(
     t1Res.content[0].text,
     t2Res.content[0].text,
-    { sub: 'alice@example.com' }
+    { sub: 'alice@rtarwaygmail.onmicrosoft.com' }
   );
   console.log('   * Redactions Applied: ' + redaction.redactionsPerformed.length);
   console.log('   * Executive Summary Output:\n');

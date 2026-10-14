@@ -452,7 +452,7 @@ To preserve absolute zero-trust integrity, token exchange with Google Cloud Plat
   - `actor_token_type`: `urn:ietf:params:oauth:token-type:jwt`
   - `audience`: Workload Identity Pool Provider (`//iam.googleapis.com/projects/.../workloadIdentityPools/k8s-agent-pool/providers/spire-oidc-provider`)
   - `access_boundary`: Credential Access Boundary JSON (physically restricts table access)
-- **Token Signature**: Asymmetric RSA Private Key (`RS256`), verified downstream by the GCP MCP server using the authoritative Google STS Public Certificate / JWKS (`certs/google-sts-cert.pem`).
+- **Token Signature**: Asymmetric RSA Private Key (`RS256`), verified downstream by the GCP MCP server. In the demo profile (`ALLOW_SIMULATION=true`) this is a throwaway keypair generated at runtime (see `shared/demoKeys.js`); no key material is committed. Real Google credential handling is planned in Phase 4 of `docs/security-remediation-plan.md`.
 - **Fail-Closed Enforcement**: The GCP MCP Server strictly inspects `alg: 'RS256'` against the public certificate. Any incoming token signed with symmetric HMAC (`HS256`) is actively detected as a security violation and **immediately rejected with HTTP 401/403**.
 
 ### 8.3 Standards Compliance & Non-Compliance Matrix

@@ -1,12 +1,15 @@
-# Keycloak Realm Import ConfigMap
-resource "kubernetes_config_map" "keycloak_realm_config" {
+# Keycloak bootstrap admin credentials. The password comes from TF_VAR_keycloak_admin_password (no default) and is
+# kept in a Kubernetes Secret rather than a plain env value. The realm, users and clients are NOT imported from a
+# file any more: they are provisioned from identity/users.yaml by terraform/identity/keycloak.
+resource "kubernetes_secret" "keycloak_admin" {
   metadata {
-    name      = "keycloak-realm-config"
+    name      = "keycloak-admin"
     namespace = kubernetes_namespace.keycloak.metadata[0].name
   }
 
   data = {
-    "azure-wif-realm.json" = file("${path.module}/../k8s/keycloak/keycloak-realm-configmap.yaml") != "" ? yamldecode(file("${path.module}/../k8s/keycloak/keycloak-realm-configmap.yaml"))["data"]["azure-wif-realm.json"] : ""
+    username = var.keycloak_admin_user
+    password = var.keycloak_admin_password
   }
 }
 
@@ -49,24 +52,40 @@ resource "kubernetes_deployment" "keycloak" {
 
         container {
           name  = "keycloak"
-          image = "quay.io/keycloak/keycloak:24.0.4"
-          args  = ["start-dev", "--import-realm", "--features=token-exchange,admin-fine-grained-authz"]
+          image = var.keycloak_image
+          args  = ["start-dev"]
 
           env {
-            name  = "KEYCLOAK_ADMIN"
-            value = "admin"
+            name = "KEYCLOAK_ADMIN"
+            value_from {
+              secret_key_ref {
+                name = kubernetes_secret.keycloak_admin.metadata[0].name
+                key  = "username"
+              }
+            }
           }
           env {
-            name  = "KEYCLOAK_ADMIN_PASSWORD"
-            value = "admin"
+            name = "KEYCLOAK_ADMIN_PASSWORD"
+            value_from {
+              secret_key_ref {
+                name = kubernetes_secret.keycloak_admin.metadata[0].name
+                key  = "password"
+              }
+            }
           }
           env {
             name  = "KC_HTTP_ENABLED"
             value = "true"
           }
+          # A fixed public URL makes the `iss` claim identical no matter how Keycloak is reached (browser via port-forward,
+          # services via the cluster DNS name). Back-channel endpoints (token, JWKS) stay reachable on the internal URL.
           env {
-            name  = "KC_HOSTNAME_STRICT"
-            value = "false"
+            name  = "KC_HOSTNAME"
+            value = var.keycloak_public_url
+          }
+          env {
+            name  = "KC_HOSTNAME_BACKCHANNEL_DYNAMIC"
+            value = "true"
           }
           env {
             name  = "JAVA_OPTS_APPEND"
@@ -76,12 +95,6 @@ resource "kubernetes_deployment" "keycloak" {
           port {
             name           = "http"
             container_port = 8080
-          }
-
-          volume_mount {
-            name       = "realm-import"
-            mount_path = "/opt/keycloak/data/import"
-            read_only  = true
           }
 
           volume_mount {
@@ -102,18 +115,11 @@ resource "kubernetes_deployment" "keycloak" {
 
           readiness_probe {
             http_get {
-              path = "/realms/azure-wif-realm"
+              path = "/realms/master"
               port = 8080
             }
             initial_delay_seconds = 30
             period_seconds        = 10
-          }
-        }
-
-        volume {
-          name = "realm-import"
-          config_map {
-            name = kubernetes_config_map.keycloak_realm_config.metadata[0].name
           }
         }
 

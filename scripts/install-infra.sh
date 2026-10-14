@@ -61,6 +61,21 @@ helm repo add istio https://istio-release.storage.googleapis.com/charts >/dev/nu
 helm repo update >/dev/null 2>&1
 echo "    Helm repositories updated."
 
+# Keycloak admin credentials: generated once, kept in a git-ignored file (never in the repo or the manifests).
+KEYCLOAK_ENV_FILE="${ROOT_DIR}/.env.keycloak"
+if [ -z "${TF_VAR_keycloak_admin_password:-}" ]; then
+  if [ ! -f "$KEYCLOAK_ENV_FILE" ]; then
+    umask 077
+    {
+      echo "export TF_VAR_keycloak_admin_user=kcadmin"
+      echo "export TF_VAR_keycloak_admin_password=$(openssl rand -base64 24 | tr -d '/+=' | cut -c1-24)"
+    } > "$KEYCLOAK_ENV_FILE"
+    echo "    Generated Keycloak admin credentials in .env.keycloak (git-ignored)."
+  fi
+  # shellcheck disable=SC1090
+  source "$KEYCLOAK_ENV_FILE"
+fi
+
 # Step 3: Verify or Apply Terraform Infrastructure (SPIRE, Istio, Keycloak)
 echo "--> 3. Checking core infrastructure (SPIRE, Istio, Keycloak)..."
 HAS_SPIRE=$(kubectl get statefulset -n spire-server spire-server -o jsonpath='{.status.readyReplicas}' 2>/dev/null || true)
@@ -92,6 +107,24 @@ docker build -t gcp-mcp-server:v1.0.0 "${ROOT_DIR}/app/gcp-mcp-server"
 # Step 5: Deploy Kubernetes Workloads
 echo "--> 5. Deploying microservices to Kubernetes..."
 kubectl apply -f "${ROOT_DIR}/k8s/namespaces.yaml"
+
+# Identity configuration: non-secret OIDC settings and the identity directory generated from identity/users.yaml.
+node "${ROOT_DIR}/scripts/identity-build-map.js" >/dev/null
+kubectl apply -f "${ROOT_DIR}/k8s/oidc-config.yaml"
+kubectl create configmap identity-map -n agent-system \
+  --from-file=identity-map.json="${ROOT_DIR}/identity/identity-map.json" \
+  --dry-run=client -o yaml | kubectl apply -f -
+
+# Demo profile only: throwaway signing keys shared by the simulated services (never committed; see .gitignore).
+echo "    Generating demo keys and creating the 'demo-keys' secret (demo profile)..."
+"${SCRIPT_DIR}/gen-demo-keys.sh" >/dev/null
+DEMO_KEYS_PATH="${DEMO_KEYS_DIR:-${ROOT_DIR}/.demo-keys}"
+kubectl create secret generic demo-keys -n agent-system \
+  --from-file=DEMO_AZURE_PRIVATE_KEY="${DEMO_KEYS_PATH}/azure-test-key.pem" \
+  --from-file=DEMO_AZURE_PUBLIC_KEY="${DEMO_KEYS_PATH}/azure-test-pub.pem" \
+  --from-file=DEMO_GOOGLE_PRIVATE_KEY="${DEMO_KEYS_PATH}/google-sts-key.pem" \
+  --from-file=DEMO_GOOGLE_PUBLIC_KEY="${DEMO_KEYS_PATH}/google-sts-pub.pem" \
+  --dry-run=client -o yaml | kubectl apply -f -
 kubectl apply -f "${ROOT_DIR}/k8s/mcp-server-deployment.yaml"
 kubectl apply -f "${ROOT_DIR}/k8s/gcp-mcp-server-deployment.yaml"
 kubectl apply -f "${ROOT_DIR}/k8s/agent-orchestrator-deployment.yaml"
@@ -134,9 +167,12 @@ echo " Infrastructure Installation Successfully Completed!"
 echo "================================================================="
 echo " Access Points:"
 echo "   * Web Frontend UI:     http://localhost:3000 (Outside SPIRE)"
-echo "   * Keycloak IdP:        http://localhost:8080 (Realm: azure-wif-realm)"
+echo "   * Keycloak IdP:        http://localhost:8080 (admin credentials: .env.keycloak)"
 echo "   * Agent Orchestrator:  http://localhost:3001 (Inside SPIRE + Istio)"
 echo "   * Azure MCP Server:    http://localhost:8080 (Low-Code Declarative MCP)"
+echo ""
+echo " Next: seed the identities (users, groups, roles) - see docs/poc-setup-guide.md, section 5:"
+echo "   source .env.keycloak && terraform -chdir=terraform/identity/keycloak init && terraform -chdir=terraform/identity/keycloak apply"
 echo ""
 echo " Run Demo via CLI:"
 echo "   ./scripts/run-demo.sh"

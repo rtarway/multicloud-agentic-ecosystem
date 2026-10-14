@@ -12,9 +12,23 @@ const tokenExchange = require('./tokenExchange');
 const jwtUtil = require('./jwtUtil');
 const opaPolicy = require('./opaPolicy');
 const graphClient = require('./graphClient');
+const { assertStartupSafe, isSimulation } = require('./simulation');
+const { buildStrictRuntime, realModeBlockers } = require('./strictRuntime');
+const { redactResponses } = require('./redact');
 
 const app = express();
 app.use(express.json());
+// Never return bearer credentials (user token, SVID, exchanged tokens) to the caller.
+app.use(redactResponses);
+
+// Strict identity path (OIDC_ISSUER set): verified user tokens, directory mapping, token exchange at the IdP.
+// A misconfiguration throws here so the service fails loudly instead of degrading.
+const strictRuntime = buildStrictRuntime();
+app.locals.userAuthenticator = strictRuntime ? strictRuntime.authenticator : null;
+tokenExchange.setIdpClient(strictRuntime ? strictRuntime.idpClient : null);
+
+const AZURE_MCP_SVID_AUDIENCE = process.env.AZURE_MCP_SVID_AUDIENCE || 'azure-mcp-server';
+const GCP_MCP_SVID_AUDIENCE = process.env.GCP_MCP_SVID_AUDIENCE || 'gcp-mcp-server';
 
 const PORT = process.env.PORT || 3001;
 const MCP_SERVER_URL = process.env.AZURE_MCP_ENDPOINT || process.env.MCP_SERVER_URL || 'http://localhost:8080';
@@ -66,8 +80,15 @@ async function callMcpServer(mcpUrl, toolName, args, oboBearerToken, delegatedUs
     headers['x-ms-client-request-id'] = correlationId;
   }
 
-  if (delegatedUser) {
-    headers['X-Delegated-Identity'] = JSON.stringify(delegatedUser);
+  // The delegated user is carried only inside the signed token; no identity header is sent.
+  // The agent proves its own identity with a JWT-SVID bound to this resource server (aud).
+  try {
+    headers['X-Agent-Identity'] = (await spireClient.fetchJwtSvid(AZURE_MCP_SVID_AUDIENCE)).token;
+  } catch (err) {
+    return {
+      isError: true,
+      content: [{ type: 'text', text: `Agent identity unavailable: ${err.message}` }]
+    };
   }
 
   return new Promise((resolve, reject) => {
@@ -140,8 +161,15 @@ async function callGcpMcpServer(mcpUrl, toolName, args, oboBearerToken, delegate
   if (correlationId) {
     headers['X-Correlation-ID'] = correlationId;
   }
-  if (delegatedUser) {
-    headers['X-Delegated-Identity'] = JSON.stringify(delegatedUser);
+  // The delegated user is carried only inside the signed token; no identity header is sent.
+  // The agent proves its own identity with a JWT-SVID bound to this resource server (aud).
+  try {
+    headers['X-Agent-Identity'] = (await spireClient.fetchJwtSvid(GCP_MCP_SVID_AUDIENCE)).token;
+  } catch (err) {
+    return {
+      isError: true,
+      content: [{ type: 'text', text: `Agent identity unavailable: ${err.message}` }]
+    };
   }
 
   return new Promise((resolve) => {
@@ -174,6 +202,20 @@ async function callGcpMcpServer(mcpUrl, toolName, args, oboBearerToken, delegate
   });
 }
 
+/**
+ * Converts a failed token exchange into an MCP-style error result so the pipeline halts on it.
+ */
+function exchangeFailureResponse(exchange) {
+  const isPolicyDenial = exchange.code === 'SCOPE_ESCALATION_DENIED';
+  return {
+    isError: true,
+    cloudIAMDecision: exchange.code || 'EXCHANGE_FAILED',
+    content: [{ type: 'text', text: `Token Exchange ${isPolicyDenial ? 'Policy Denial' : 'Failure'}: ${exchange.error}` }],
+    audit: exchange.audit,
+    ...(exchange.claimsChallenge ? { stepUp: { required: true, claims: exchange.claimsChallenge } } : {})
+  };
+}
+
 function decodeTokenComplete(token) {
   if (!token || typeof token !== 'string') return null;
   const parts = token.split('.');
@@ -197,11 +239,33 @@ app.post('/api/agent/chat', async (req, res) => {
     return res.status(400).json({ error: 'Missing prompt parameter.' });
   }
 
-  // 1. Inspect User Identity from Keycloak Token or Entra User Assertion
+  // 1. Authenticate the user.
+  //    Strict mode verifies the token against the IdP and maps it through the identity directory.
+  //    The legacy decode-only path exists for the demo profile and is refused otherwise.
   let userToken = null;
   let userClaims = { sub: 'guest@example.com', roles: ['regular-user'] };
+  let verifiedUser = null;
 
-  if (authHeader && authHeader.startsWith('Bearer ')) {
+  if (app.locals.userAuthenticator) {
+    try {
+      verifiedUser = await app.locals.userAuthenticator.authenticate(authHeader);
+    } catch (err) {
+      return res.status(err.status || 401).json({ error: 'UNAUTHENTICATED', code: err.code || 'AUTH_FAILED', message: err.message });
+    }
+    userToken = verifiedUser.token;
+    userClaims = {
+      sub: verifiedUser.identity.keycloakEmail,
+      email: verifiedUser.identity.keycloakEmail,
+      roles: verifiedUser.roles,
+      groups: verifiedUser.groups,
+      scope: verifiedUser.consentedScopes.join(' ')
+    };
+  } else if (!isSimulation()) {
+    return res.status(503).json({
+      error: 'AUTHENTICATION_NOT_CONFIGURED',
+      message: 'OIDC_ISSUER is not configured, so user tokens cannot be verified. Refusing to trust an unverified token.'
+    });
+  } else if (authHeader && authHeader.startsWith('Bearer ')) {
     userToken = authHeader.substring(7).trim();
     const decoded = jwtUtil.decode(userToken);
     if (decoded) {
@@ -226,7 +290,17 @@ app.post('/api/agent/chat', async (req, res) => {
   const plan = llmSimulator.plan(prompt, userClaims);
 
   // 3. Acquire Agent SPIRE Workload Identity SVID
-  const agentSvid = await spireClient.fetchJwtSvid('mcp-azure-service');
+  let agentSvid;
+  try {
+    agentSvid = await spireClient.fetchJwtSvid('mcp-azure-service');
+  } catch (err) {
+    // Fail closed: without a workload identity the agent must not act on anyone's behalf.
+    return res.status(503).json({
+      error: 'AGENT_IDENTITY_UNAVAILABLE',
+      code: err.code || 'SVID_UNAVAILABLE',
+      message: err.message
+    });
+  }
 
   // 4. Orchestrator Fine-Grained Policy (FGP) Evaluation via OPA
   const opaResult = opaPolicy.evaluate({
@@ -268,7 +342,7 @@ app.post('/api/agent/chat', async (req, res) => {
           reason: opaResult.reason
         },
         hop4_storageDelegation: {
-          name: 'Hop 4: JIT User-Delegation Token (Not Minted)',
+          name: 'Hop 4: User-delegated Storage access (Not Evaluated)',
           status: 'NOT_EVALUATED'
         }
       },
@@ -294,14 +368,16 @@ app.post('/api/agent/chat', async (req, res) => {
     const step1 = plan.steps[0];
     const step1Exchange = await tokenExchange.exchangeToken({
       userToken,
+      verifiedUser,
       userEntraToken: activeEntraAssertion,
       agentSvid,
       targetAudience: entraAudience,
       requestedTool: step1.tool,
+      toolArgs: step1.arguments,
       turn: 1
     });
     const step1CorrelationId = 'chain-cross-step1-' + (userClaims.email || userClaims.sub || 'user').replace(/[^a-zA-Z0-9]/g, '-') + '-' + crypto.randomUUID().substring(0, 8);
-    const step1McpRes = await callMcpServer(
+    const step1McpRes = step1Exchange.isError ? exchangeFailureResponse(step1Exchange) : await callMcpServer(
       MCP_SERVER_URL,
       step1.tool,
       step1.arguments,
@@ -358,6 +434,7 @@ app.post('/api/agent/chat', async (req, res) => {
 
       step2Exchange = await tokenExchange.exchangeToken({
         userToken,
+        verifiedUser,
         agentSvid,
         targetAudience: gcpAudience,
         requestedTool: step2.tool,
@@ -366,13 +443,8 @@ app.post('/api/agent/chat', async (req, res) => {
       });
 
       if (step2Exchange.isError || step2Exchange.status === 'DENIED_BY_POLICY') {
-        console.warn(`[ORCH-EXEC] ❌ Turn 2 Scope Escalation Denied: ${step2Exchange.error}`);
-        step2GcpRes = {
-          isError: true,
-          content: [{ type: 'text', text: `Token Exchange Policy Denial: ${step2Exchange.error}` }],
-          cloudIAMDecision: 'SCOPE_ESCALATION_DENIED',
-          audit: step2Exchange.audit
-        };
+        console.warn(`[ORCH-EXEC] ❌ Turn 2 token exchange refused (${step2Exchange.code}): ${step2Exchange.error}`);
+        step2GcpRes = exchangeFailureResponse(step2Exchange);
         halted = true;
         finalError = step2GcpRes;
       } else {
@@ -492,10 +564,10 @@ app.post('/api/agent/chat', async (req, res) => {
         name: 'Hop 3: RFC 8693 Downscoped Token (Turn 1 -> Azure Storage MCP)',
         cloud: 'Azure',
         tokenType: 'RFC 8693 Delegated Access Token',
-        sub: step1Exchange.claims.sub,
-        aud: step1Exchange.claims.aud,
-        scope: step1Exchange.claims.roles || step1Exchange.claims.scope,
-        act: step1Exchange.claims.act,
+        sub: step1Exchange.claims?.sub,
+        aud: step1Exchange.claims?.aud,
+        scope: step1Exchange.claims?.roles || step1Exchange.claims?.scope,
+        act: step1Exchange.claims?.act,
         delegationType: 'RFC8693_TOKEN_EXCHANGE',
         signatureStatus: 'VALID_CRYPTOGRAPHIC_CHAIN',
         ttlSeconds: 300,
@@ -507,10 +579,10 @@ app.post('/api/agent/chat', async (req, res) => {
         name: 'Hop 3: RFC 8693 Downscoped Token (Turn 1 -> Azure Storage MCP)',
         cloud: 'Azure',
         tokenType: 'RFC 8693 Delegated Access Token',
-        sub: step1Exchange.claims.sub,
-        aud: step1Exchange.claims.aud,
-        scope: step1Exchange.claims.roles || step1Exchange.claims.scope,
-        act: step1Exchange.claims.act,
+        sub: step1Exchange.claims?.sub,
+        aud: step1Exchange.claims?.aud,
+        scope: step1Exchange.claims?.roles || step1Exchange.claims?.scope,
+        act: step1Exchange.claims?.act,
         delegationType: 'RFC8693_TOKEN_EXCHANGE',
         signatureStatus: 'VALID_CRYPTOGRAPHIC_CHAIN',
         ttlSeconds: 300,
@@ -521,7 +593,7 @@ app.post('/api/agent/chat', async (req, res) => {
       hop4_azureExecution: {
         name: 'Hop 4: Azure Storage Execution Result',
         cloud: 'Azure',
-        credentialType: 'Azure Storage JIT User-Delegation (60s)',
+        credentialType: 'Entra OBO user token -> Azure RBAC',
         ttlSeconds: 60,
         status: step1Status,
         resource: '/app1/financial-report.json',
@@ -535,7 +607,7 @@ app.post('/api/agent/chat', async (req, res) => {
       hop4_storageDelegation: {
         name: 'Hop 4: Azure Storage Execution Result',
         cloud: 'Azure',
-        credentialType: 'Azure Storage JIT User-Delegation (60s)',
+        credentialType: 'Entra OBO user token -> Azure RBAC',
         ttlSeconds: 60,
         status: step1Status,
         resource: '/app1/financial-report.json',
@@ -547,14 +619,14 @@ app.post('/api/agent/chat', async (req, res) => {
         response: step1McpRes
       },
       hop5_gcpMultiHopToken: step2Exchange ? (
-        step2Exchange.status === 'DENIED_BY_POLICY' ? {
+        step2Exchange.isError ? {
           name: 'Hop 5: RFC 8693 Multi-Hop Recursive Token (Turn 2 -> GCP BigQuery MCP)',
           cloud: 'GCP',
-          status: 'DENIED_BY_POLICY',
+          status: step2Exchange.status || 'DENIED_BY_POLICY',
           reason: step2Exchange.error,
           code: step2Exchange.code,
           tokenType: 'TOKEN_EXCHANGE_DENIED',
-          issuer: 'Google Cloud IAM (Blocked by Gate 1 Scope Policy)',
+          issuer: 'Google Cloud IAM (token not minted)',
           rawToken: null,
           decodedToken: { error: step2Exchange.error, code: step2Exchange.code, requiredScope: step2Exchange.requiredScope }
         } : {
@@ -562,11 +634,11 @@ app.post('/api/agent/chat', async (req, res) => {
           cloud: 'GCP',
           tokenType: 'Google Cloud IAM / RFC 8693 Delegated Token',
           issuer: 'Google Cloud IAM (https://sts.googleapis.com)',
-          sub: step2Exchange.claims.sub,
-          aud: step2Exchange.claims.aud,
-          scope: step2Exchange.claims.roles || step2Exchange.claims.scope,
-          act: step2Exchange.claims.act,
-          actorChain: step2Exchange.claims.actorChain,
+          sub: step2Exchange.claims?.sub,
+          aud: step2Exchange.claims?.aud,
+          scope: step2Exchange.claims?.roles || step2Exchange.claims?.scope,
+          act: step2Exchange.claims?.act,
+          actorChain: step2Exchange.claims?.actorChain,
           delegationType: 'RFC8693_MULTI_HOP_CHAIN',
           signatureStatus: 'VALID_CRYPTOGRAPHIC_CHAIN',
           credentialAccessBoundary: step2Exchange.credentialAccessBoundary,
@@ -646,6 +718,7 @@ app.post('/api/agent/chat', async (req, res) => {
         finalStatus: halted ? 'FAILED_POLICY_CHECK' : 'COMPLETED_SUCCESSFULLY'
       },
       hopToHop: finalHopToHop,
+      stepUp: halted ? (finalError && finalError.stepUp) : undefined,
       mcpResponse: halted ? finalError : {
         isError: false,
         content: [{ type: 'text', text: step3Redaction ? step3Redaction.redactedReport : 'Cross-cloud pipeline finished successfully.' }]
@@ -667,13 +740,15 @@ app.post('/api/agent/chat', async (req, res) => {
     const step1 = plan.steps[0];
     const step1Exchange = await tokenExchange.exchangeToken({
       userToken,
+      verifiedUser,
       userEntraToken: activeEntraAssertion,
       agentSvid,
       targetAudience: entraAudience,
-      requestedTool: step1.tool
+      requestedTool: step1.tool,
+      toolArgs: step1.arguments
     });
     const step1CorrelationId = 'chain-step1-' + (userClaims.email || userClaims.sub || 'user').replace(/[^a-zA-Z0-9]/g, '-') + '-' + crypto.randomUUID().substring(0, 8);
-    const step1McpRes = await callMcpServer(
+    const step1McpRes = step1Exchange.isError ? exchangeFailureResponse(step1Exchange) : await callMcpServer(
       MCP_SERVER_URL,
       step1.tool,
       step1.arguments,
@@ -728,13 +803,15 @@ app.post('/api/agent/chat', async (req, res) => {
       const step2 = plan.steps[1];
       step2Exchange = await tokenExchange.exchangeToken({
         userToken,
+        verifiedUser,
         userEntraToken: activeEntraAssertion,
         agentSvid,
         targetAudience: entraAudience,
-        requestedTool: step2.tool
+        requestedTool: step2.tool,
+        toolArgs: step2.arguments
       });
       const step2CorrelationId = 'chain-step2-' + (userClaims.email || userClaims.sub || 'user').replace(/[^a-zA-Z0-9]/g, '-') + '-' + crypto.randomUUID().substring(0, 8);
-      step2McpRes = await callMcpServer(
+      step2McpRes = step2Exchange.isError ? exchangeFailureResponse(step2Exchange) : await callMcpServer(
         MCP_SERVER_URL,
         step2.tool,
         step2.arguments,
@@ -859,6 +936,7 @@ app.post('/api/agent/chat', async (req, res) => {
         // RFC 8693 Token Exchange for Microsoft Graph (Audience: https://graph.microsoft.com, Scope: Mail.Send)
         step4Exchange = await tokenExchange.exchangeToken({
           userToken,
+          verifiedUser,
           agentSvid,
           targetAudience: 'https://graph.microsoft.com',
           requestedTool: 'microsoft_graph_direct'
@@ -873,9 +951,12 @@ app.post('/api/agent/chat', async (req, res) => {
         );
 
         if (!hasMailSend) {
+          const exchangeFailed = step4Exchange?.isError && step4Exchange.code !== 'SCOPE_ESCALATION_DENIED';
           const authDenial = {
             isError: true,
-            content: [{ type: 'text', text: `Authorization Denied: Principal '${userClaims.sub}' lacks required Microsoft Graph scope 'Mail.Send' to dispatch emails.` }],
+            content: [{ type: 'text', text: exchangeFailed
+              ? `Token Exchange Failure: ${step4Exchange.error}`
+              : `Authorization Denied: Principal '${userClaims.sub}' lacks required Microsoft Graph scope 'Mail.Send' to dispatch emails.` }],
             audit: {
               principal: userClaims.sub,
               actingAgent: agentSvid.spiffeId,
@@ -1012,11 +1093,11 @@ app.post('/api/agent/chat', async (req, res) => {
       hop3_rfc8693Token: {
         name: 'Hop 3: RFC 8693 Downscoped Delegated Token (Step 1 -> MCP Server)',
         tokenType: 'RFC 8693 Delegated Access Token',
-        sub: step1Exchange.claims.sub,
-        aud: step1Exchange.claims.aud,
-        scope: step1Exchange.claims.roles || step1Exchange.claims.scope,
+        sub: step1Exchange.claims?.sub,
+        aud: step1Exchange.claims?.aud,
+        scope: step1Exchange.claims?.roles || step1Exchange.claims?.scope,
         ttlSeconds: 300,
-        act: step1Exchange.claims.act,
+        act: step1Exchange.claims?.act,
         delegationType: 'RFC8693_TOKEN_EXCHANGE',
         signatureStatus: 'VALID_CRYPTOGRAPHIC_CHAIN',
         rawToken: step1Exchange.exchangedToken,
@@ -1024,8 +1105,8 @@ app.post('/api/agent/chat', async (req, res) => {
         fullTokenClaims: step1Exchange.claims
       },
       hop4_storageDelegation: {
-        name: 'Hop 4: JIT Storage Execution Result (MCP ➔ Azure Storage)',
-        credentialType: (step1McpRes?.isError || step2McpRes?.isError) ? 'Cloud IAM / Policy Denial' : 'Azure Storage JIT Access (app1 & app2)',
+        name: 'Hop 4: Storage Execution Result (MCP ➔ Azure Storage)',
+        credentialType: (step1McpRes?.isError || step2McpRes?.isError) ? 'Cloud IAM / Policy Denial' : 'Azure Storage as the signed-in user (app1 & app2)',
         ttlSeconds: 60,
         resource: '/app1 & /app2',
         storageAccount: 'azwifstoragepocrt',
@@ -1104,6 +1185,7 @@ app.post('/api/agent/chat', async (req, res) => {
         finalStatus: halted ? 'FAILED_POLICY_CHECK' : 'COMPLETED_SUCCESSFULLY'
       },
       hopToHop: finalHopToHop,
+      stepUp: halted ? (finalError && finalError.stepUp) : undefined,
       mcpResponse: halted ? finalError : (step4DirectRes || { isError: false, content: [{ type: 'text', text: 'Multi-hop autonomous pipeline finished successfully.' }] }),
       status: halted ? 'FAILED_POLICY_CHECK' : 'COMPLETED_SUCCESSFULLY'
     });
@@ -1117,26 +1199,15 @@ app.post('/api/agent/chat', async (req, res) => {
 
   const exchangeResult = await tokenExchange.exchangeToken({
     userToken,
+    verifiedUser,
     userEntraToken: activeEntraAssertion,
     agentSvid,
     targetAudience,
-    requestedTool: plan.plannedTool
+    requestedTool: plan.plannedTool,
+    toolArgs: plan.arguments
   });
 
-  let targetToken = exchangeResult.exchangedToken || null;
-
-  // If testing rogue actor injection scenario, tamper with the act claim
-  if (targetToken && (req.body.context?.simulate_rogue_actor || prompt.toLowerCase().includes('rogue actor') || prompt.toLowerCase().includes('tamper'))) {
-    const tamperedClaims = {
-      ...exchangeResult.claims,
-      act: {
-        sub: 'untrusted-injected-proxy-agent',
-        iss: 'https://attacker-proxy.internal',
-        client_id: 'bad-actor-uuid'
-      }
-    };
-    targetToken = jwtUtil.sign(tamperedClaims, process.env.JWT_SECRET || 'demo-obo-token-secret-key-2026', { expiresInSeconds: 300 });
-  }
+  const targetToken = exchangeResult.exchangedToken || null;
 
   const correlationId = 'chain-' + (userClaims.email || userClaims.sub || 'user').replace(/[^a-zA-Z0-9]/g, '-') + '-' + crypto.randomUUID().substring(0, 8);
 
@@ -1184,8 +1255,8 @@ app.post('/api/agent/chat', async (req, res) => {
   try {
     if (mcpResponse?.content?.[0]?.text) {
       const parsedText = JSON.parse(mcpResponse.content[0].text);
-      if (parsedText?.data?.delegationMeta) {
-        storageDelegationDetails = parsedText.data.delegationMeta;
+      if (parsedText?.data?.accessMeta || parsedText?.data?.delegationMeta) {
+        storageDelegationDetails = parsedText.data.accessMeta || parsedText.data.delegationMeta;
       }
     }
   } catch {}
@@ -1237,8 +1308,8 @@ app.post('/api/agent/chat', async (req, res) => {
       fullTokenClaims: decodedObo || { error: exchangeResult.error }
     },
     hop4_storageDelegation: {
-      name: isGcp ? 'Hop 4: Google Cloud BigQuery Execution' : 'Hop 4: JIT User-Delegation Token (MCP Server -> Azure Storage)',
-      credentialType: isGcp ? 'GCP IAM / BigQuery Parameterized Execution' : 'OAuth 2.0 User-Delegation SAS / Bearer (60s JIT)',
+      name: isGcp ? 'Hop 4: Google Cloud BigQuery Execution' : 'Hop 4: User-delegated Storage access (MCP Server -> Azure Storage, Azure RBAC decides)',
+      credentialType: isGcp ? 'GCP IAM / BigQuery Parameterized Execution' : 'Entra OBO Storage token for the signed-in user',
       cloud: isGcp ? 'GCP' : 'Azure',
       ttlSeconds: exchangeResult.isError ? 0 : 60,
       resource: plan.arguments ? (isGcp ? `${plan.arguments.dataset || 'analytics_data'}/${plan.arguments.table || 'regional_sales'}` : `/${plan.arguments.container}/${plan.arguments.filename}`) : undefined,
@@ -1275,11 +1346,12 @@ app.post('/api/agent/chat', async (req, res) => {
       downscopedScopes: exchangeResult.claims?.roles || exchangeResult.claims?.scope || exchangeResult.requiredScope,
       actClaim: decodedObo?.act,
       tokenType: exchangeResult.tokenType,
-      tokenPreview: targetToken ? (targetToken.slice(0, 35) + '...') : 'NONE (EXCHANGE_DENIED)'
+      tokenPreview: targetToken ? '[REDACTED]' : 'NONE (EXCHANGE_DENIED)'
     },
     hopToHop,
     plan,
     mcpResponse,
+    stepUp: (mcpResponse && mcpResponse.stepUp) || (exchangeResult.claimsChallenge ? { required: true, claims: exchangeResult.claimsChallenge } : undefined),
     code: exchangeResult.isError ? exchangeResult.code : undefined,
     error: exchangeResult.isError ? exchangeResult.error : undefined,
     status: (exchangeResult.isError || mcpResponse.isError) ? 'FAILED_POLICY_CHECK' : 'COMPLETED_SUCCESSFULLY'
@@ -1289,6 +1361,7 @@ app.post('/api/agent/chat', async (req, res) => {
 });
 
 if (require.main === module) {
+  assertStartupSafe('agent-orchestrator', { realModeBlockers: realModeBlockers() });
   app.listen(PORT, () => {
     console.log(`===========================================================`);
     console.log(` A2A Agent Orchestrator listening on port ${PORT}`);

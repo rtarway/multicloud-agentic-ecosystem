@@ -5,6 +5,11 @@ const express = require('express');
 const http = require('http');
 const path = require('path');
 const jwtUtil = require('./jwtUtil');
+const { isSimulation, getDemoSecret, assertStartupSafe } = require('./simulation');
+const { redactDeep } = require('./redact');
+const { readLoginConfig, createOidcLogin } = require('./oidcLogin');
+const { readEntraConfig, createEntraLogin } = require('./entraLogin');
+const { createResolver } = require('./identityMapping');
 
 const app = express();
 app.use(express.json());
@@ -13,7 +18,6 @@ app.use(express.static(path.join(__dirname, '..', 'public')));
 const PORT = process.env.PORT || 3000;
 const AGENT_URL = process.env.AGENT_ORCHESTRATOR_URL || 'http://localhost:3001';
 const KEYCLOAK_URL = process.env.KEYCLOAK_URL || 'http://localhost:8080';
-const JWT_SECRET = process.env.JWT_SECRET || 'demo-obo-token-secret-key-2026';
 
 // Health Check
 app.get('/healthz', (req, res) => {
@@ -23,6 +27,82 @@ app.get('/healthz', (req, res) => {
     spireManaged: false, // Explicitly outside SPIRE
     agentEndpoint: AGENT_URL,
     keycloakEndpoint: KEYCLOAK_URL
+  });
+});
+
+// ---- real login: OIDC authorization code + PKCE, server-side session (BFF) ----
+const loginConfig = readLoginConfig();
+app.locals.oidcLogin = loginConfig ? createOidcLogin({ config: loginConfig }) : null;
+
+// ---- Entra sign-in for the same user (needed for Azure tools) ----
+const entraConfig = readEntraConfig();
+app.locals.entraLogin = entraConfig && app.locals.oidcLogin ? createEntraLogin({ config: entraConfig }) : null;
+app.locals.identityResolver = process.env.IDENTITY_MAP_PATH ? createResolver(process.env.IDENTITY_MAP_PATH) : null;
+
+/** The Entra identity the directory maps the signed-in IdP user to, or null (fail closed). */
+function expectedEntraUpn(session) {
+  const resolver = app.locals.identityResolver;
+  if (!resolver) return null;
+  try {
+    return resolver.requireEntraUpn(resolver.resolveFromClaims({ email: session.email, email_verified: session.emailVerified === true }));
+  } catch {
+    return null;
+  }
+}
+
+function authMode() {
+  if (app.locals.oidcLogin) return 'oidc';
+  return isSimulation() ? 'demo' : 'none';
+}
+
+app.get('/auth/login', (req, res) => {
+  if (!app.locals.oidcLogin) return res.status(503).json({ error: 'LOGIN_DISABLED', message: 'OIDC login is not configured (OIDC_ISSUER / OIDC_CLIENT_ID).' });
+  return app.locals.oidcLogin.login(req, res);
+});
+
+app.get('/auth/callback', async (req, res) => {
+  if (!app.locals.oidcLogin) return res.status(503).json({ error: 'LOGIN_DISABLED' });
+  return app.locals.oidcLogin.callback(req, res);
+});
+
+app.post('/auth/logout', (req, res) => {
+  const login = app.locals.oidcLogin;
+  if (!login) return res.status(503).json({ error: 'LOGIN_DISABLED' });
+  if (!login.sameOrigin(req)) return res.status(403).json({ error: 'CROSS_ORIGIN_REQUEST_REFUSED' });
+  return login.logout(req, res);
+});
+
+app.get('/auth/entra/login', (req, res) => {
+  const entra = app.locals.entraLogin;
+  const login = app.locals.oidcLogin;
+  if (!entra || !login) return res.status(503).json({ error: 'ENTRA_LOGIN_DISABLED', message: 'Entra sign-in is not configured.' });
+  const session = login.getSession(req);
+  if (!session) return res.redirect(302, '/auth/login');
+  const upn = expectedEntraUpn(session);
+  if (!upn) return res.status(403).json({ error: 'NO_ENTRA_IDENTITY', message: 'The directory has no Azure identity for this user.' });
+  return entra.start(req, res, { session, expectedUpn: upn });
+});
+
+app.get('/auth/entra/callback', async (req, res) => {
+  const entra = app.locals.entraLogin;
+  const login = app.locals.oidcLogin;
+  if (!entra || !login) return res.status(503).json({ error: 'ENTRA_LOGIN_DISABLED' });
+  const session = login.getSession(req);
+  if (!session) return res.redirect(302, '/auth/login');
+  return entra.callback(req, res, { session });
+});
+
+// What the browser may know: the auth mode and, when signed in, the user's identity and consented scopes (no tokens).
+app.get('/api/session', (req, res) => {
+  const mode = authMode();
+  const login = app.locals.oidcLogin;
+  const session = login ? login.getSession(req) : null;
+  res.json({
+    mode,
+    authenticated: Boolean(session),
+    signInUrl: login ? '/auth/login' : null,
+    user: session ? login.sessionInfo(session) : null,
+    entra: app.locals.entraLogin ? { ...app.locals.entraLogin.info(session), signInUrl: '/auth/entra/login' } : { configured: false }
   });
 });
 
@@ -66,14 +146,24 @@ const USER_CONFIGS = {
 USER_CONFIGS['alice-no-mail'] = USER_CONFIGS.charlie;
 
 // Pre-configured Users List Endpoint for POC Login Screen
-app.get('/api/users', (req, res) => {
+// The login below mints tokens itself and lists demo credentials. That is acceptable only in the demo profile;
+// the real OIDC login replaces it in Phase 2.
+function requireDemoLogin(req, res, next) {
+  if (isSimulation()) return next();
+  return res.status(503).json({
+    error: 'LOGIN_DISABLED',
+    message: 'Demo login is disabled (ALLOW_SIMULATION is not true). Real OIDC login is not implemented yet.'
+  });
+}
+
+app.get('/api/users', requireDemoLogin, (req, res) => {
   res.json({
     users: [USER_CONFIGS.alice, USER_CONFIGS.bob, USER_CONFIGS.charlie]
   });
 });
 
 // Authentication Endpoint: Keycloak Login Simulation & Direct Grant
-app.post('/api/login', async (req, res) => {
+app.post('/api/login', requireDemoLogin, async (req, res) => {
   const { username, password, userType } = req.body || {};
 
   let resolvedUser = 'bob';
@@ -101,7 +191,7 @@ app.post('/api/login', async (req, res) => {
       roles: user.roles,
       scope: user.scopes.join(' ')
     },
-    JWT_SECRET,
+    getDemoSecret('JWT_SECRET'),
     { expiresInSeconds: 3600 }
   );
 
@@ -110,13 +200,15 @@ app.post('/api/login', async (req, res) => {
   const orchestratorAudience = `api://${ENTRA_CLIENT_ID}`;
   let liveEntraUserToken = null;
 
-  // Attempt live Entra ID ROPC acquisition if running against live Entra
+  // Optional live Entra sign-in for the demo profile. The password must be supplied explicitly through the
+  // environment; no default credential exists. (Replaced by an auth-code + PKCE flow in Phase 3.)
   try {
+    if (!process.env.DEMO_ENTRA_USER_PASSWORD) throw new Error('DEMO_ENTRA_USER_PASSWORD not set');
     const postData = require('querystring').stringify({
       grant_type: 'password',
       client_id: ENTRA_CLIENT_ID,
       username: user.email,
-      password: user.password === 'Password123!' ? 'Password123!Safe' : user.password,
+      password: process.env.DEMO_ENTRA_USER_PASSWORD,
       scope: `${orchestratorAudience}/access_as_user openid profile`
     });
 
@@ -171,7 +263,7 @@ app.post('/api/login', async (req, res) => {
 
   const entraToken = liveEntraUserToken || (azureTestKey
     ? jwtUtil.signRS256(entraPayload, azureTestKey, { kid: 'azure-test-key-1', expiresInSeconds: 3600 })
-    : jwtUtil.sign(entraPayload, JWT_SECRET, { expiresInSeconds: 3600 }));
+    : jwtUtil.sign(entraPayload, getDemoSecret('JWT_SECRET'), { expiresInSeconds: 3600 }));
 
   // 3. Mint Google Cloud IAM / Google STS Subject Token (RS256 PKI - Option 3 Workload Identity Pool)
   const googlePrivateKey = jwtUtil.getGoogleStsPrivateKey();
@@ -203,7 +295,7 @@ app.post('/api/login', async (req, res) => {
 
   const googleIamToken = googlePrivateKey
     ? jwtUtil.signRS256(gcpPayload, googlePrivateKey, { expiresInSeconds: 3600 })
-    : jwtUtil.sign(gcpPayload, JWT_SECRET, { expiresInSeconds: 3600 });
+    : jwtUtil.sign(gcpPayload, getDemoSecret('JWT_SECRET'), { expiresInSeconds: 3600 });
 
   return res.json({
     authenticated: true,
@@ -218,16 +310,34 @@ app.post('/api/login', async (req, res) => {
 // Proxy Chat/Prompt to Agent Orchestrator
 app.post('/api/chat', async (req, res) => {
   const { prompt, userEntraToken, entraToken } = req.body || {};
-  const token = (req.body && req.body.token) || (req.headers.authorization ? req.headers.authorization.replace(/^Bearer\s+/i, '') : null);
-  const activeEntraToken = userEntraToken || entraToken || req.headers['x-user-entra-token'] || null;
+  let entraAssertion = null;
 
   if (!prompt) {
     return res.status(400).json({ error: 'Missing prompt.' });
   }
 
+  // The bearer token comes from the server-side session in OIDC mode; a token supplied by the browser is ignored.
+  // Without OIDC the legacy demo behaviour (token supplied by the page) exists only in the demo profile.
+  let token = null;
+  const login = app.locals.oidcLogin;
+  if (login) {
+    if (!login.sameOrigin(req)) return res.status(403).json({ error: 'CROSS_ORIGIN_REQUEST_REFUSED' });
+    const session = login.getSession(req);
+    if (!session) return res.status(401).json({ error: 'NOT_SIGNED_IN', signInUrl: '/auth/login' });
+    token = await login.accessTokenFor(session);
+    if (!token) return res.status(401).json({ error: 'SESSION_EXPIRED', signInUrl: '/auth/login' });
+    // The Entra assertion comes from the server-side session only; one supplied by the browser is ignored.
+    entraAssertion = app.locals.entraLogin ? await app.locals.entraLogin.accessTokenFor(session) : null;
+  } else if (isSimulation()) {
+    token = (req.body && req.body.token) || (req.headers.authorization ? req.headers.authorization.replace(/^Bearer\s+/i, '') : null);
+    entraAssertion = userEntraToken || entraToken || req.headers['x-user-entra-token'] || null;
+  } else {
+    return res.status(503).json({ error: 'LOGIN_DISABLED', message: 'No login is configured and the demo profile is off.' });
+  }
+
+  const activeEntraToken = entraAssertion;
   const payload = JSON.stringify({
     prompt,
-    token,
     userEntraToken: activeEntraToken,
     context: req.body && req.body.context,
     emailConfig: req.body && req.body.emailConfig
@@ -247,7 +357,7 @@ app.post('/api/chat', async (req, res) => {
   // If local test dispatcher injected, use it
   if (app.locals.agentDispatcher) {
     const result = await app.locals.agentDispatcher(prompt, token);
-    return res.json(result);
+    return res.json(redactDeep(result));
   }
 
   const agentUrl = new URL('/api/agent/chat', AGENT_URL);
@@ -257,7 +367,7 @@ app.post('/api/chat', async (req, res) => {
     agentRes.on('data', chunk => (data += chunk));
     agentRes.on('end', () => {
       try {
-        res.status(agentRes.statusCode).json(JSON.parse(data));
+        res.status(agentRes.statusCode).json(redactDeep(JSON.parse(data)));
       } catch {
         res.status(agentRes.statusCode).send(data);
       }
@@ -277,6 +387,9 @@ app.post('/api/chat', async (req, res) => {
 });
 
 if (require.main === module) {
+  assertStartupSafe('web-frontend', {
+    realModeBlockers: app.locals.oidcLogin ? [] : ['OIDC_ISSUER and OIDC_CLIENT_ID are not set (no way to sign users in)']
+  });
   app.listen(PORT, () => {
     console.log(`===========================================================`);
     console.log(` Web Frontend running on http://localhost:${PORT}`);

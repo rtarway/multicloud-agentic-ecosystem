@@ -2,6 +2,8 @@ const fs = require('fs');
 const path = require('path');
 const yamlUtil = require('./yamlUtil');
 const azureStorage = require('./azureStorage');
+const { SAFE_BLOB_NAME } = azureStorage;
+const { storageScope } = require('./azureScopes');
 
 class DeclarativeEngine {
   constructor(toolsYamlPath) {
@@ -61,16 +63,44 @@ class DeclarativeEngine {
 
     console.log(`\n[MCP-EVAL] >>> Executing Tool '${toolName}' for principal '${sub}' (agent '${actSub}')...`);
 
-    // Check OBO Downscoped Scope Authorization
-    const hasRequiredScope = scopes.includes(toolDef.required_scope);
-    console.log(`[MCP-EVAL] Step 1 (CGP): Required scope='${toolDef.required_scope}', Token scopes=[${scopes.join(', ')}] -> ${hasRequiredScope ? 'PASSED ✅' : 'DENIED ❌'}`);
+    // Input validation against declarative constraints (the delegated scope depends on the container and action)
+    console.log(`[MCP-EVAL] Step 1 (Validation - Storage): container='${container}', action='${action}', filename='${filename}'`);
+
+    if (!container || !toolDef.allowed_containers?.includes(container)) {
+      console.warn(`[MCP-EVAL] ❌ Invalid container '${container}'. Allowed: [${(toolDef.allowed_containers || []).join(', ')}]`);
+      return {
+        isError: true,
+        content: [{ type: 'text', text: `Invalid parameter 'container': '${container}' is not allowed for '${toolName}'. Permitted: [${(toolDef.allowed_containers || []).join(', ')}].` }]
+      };
+    }
+
+    if (!action || !toolDef.allowed_actions?.includes(action)) {
+      console.warn(`[MCP-EVAL] ❌ Invalid action '${action}'. Allowed: [${(toolDef.allowed_actions || []).join(', ')}]`);
+      return {
+        isError: true,
+        content: [{ type: 'text', text: `Invalid parameter 'action': '${action}' is not allowed for '${toolName}'. Permitted: [${(toolDef.allowed_actions || []).join(', ')}].` }]
+      };
+    }
+
+    if (!filename || !SAFE_BLOB_NAME.test(filename)) {
+      console.warn(`[MCP-EVAL] ❌ Missing or invalid parameter 'filename'.`);
+      return {
+        isError: true,
+        content: [{ type: 'text', text: filename ? `Invalid parameter 'filename': a blob name is one path segment of letters, digits, '.', '_' and '-'.` : `Missing required parameter 'filename'.` }]
+      };
+    }
+
+    // Delegated-scope authorization: the token must carry the scope for exactly this operation
+    const requiredScope = storageScope(action, container);
+    const hasRequiredScope = scopes.includes(requiredScope);
+    console.log(`[MCP-EVAL] Step 2 (Scope): Required='${requiredScope}', Token scopes=[${scopes.join(', ')}] -> ${hasRequiredScope ? 'PASSED ✅' : 'DENIED ❌'}`);
     if (!hasRequiredScope) {
       const auditLog = {
         timestamp: new Date().toISOString(),
         principal: sub,
         actingAgent: actSub,
         requestedTool: toolName,
-        requiredScope: toolDef.required_scope,
+        requiredScope,
         grantedScopes: scopes,
         decision: 'DENIED_BY_POLICY'
       };
@@ -83,54 +113,12 @@ class DeclarativeEngine {
         content: [
           {
             type: 'text',
-            text: `MCP Authorization Denied: Principal '${sub}' (acting agent '${actSub}') lacks required scope '${toolDef.required_scope}' for tool '${toolName}'. Current granted scopes: [${scopes.join(', ')}].`
+            text: `MCP Authorization Denied: Principal '${sub}' (acting agent '${actSub}') lacks required scope '${requiredScope}' for tool '${toolName}'. Current granted scopes: [${scopes.join(', ')}].`
           }
         ],
         audit: auditLog
       };
     }
-
-    // Input validation against declarative constraints
-    console.log(`[MCP-EVAL] Step 2 (Validation - Storage): container='${container}', action='${action}', filename='${filename}'`);
-
-      if (!container || !toolDef.allowed_containers?.includes(container)) {
-        console.warn(`[MCP-EVAL] ❌ Invalid container '${container}'. Allowed: [${(toolDef.allowed_containers || []).join(', ')}]`);
-        return {
-          isError: true,
-          content: [
-            {
-              type: 'text',
-              text: `Invalid parameter 'container': '${container}' is not allowed for '${toolName}'. Permitted: [${(toolDef.allowed_containers || []).join(', ')}].`
-            }
-          ]
-        };
-      }
-
-      if (!action || !toolDef.allowed_actions?.includes(action)) {
-        console.warn(`[MCP-EVAL] ❌ Invalid action '${action}'. Allowed: [${(toolDef.allowed_actions || []).join(', ')}]`);
-        return {
-          isError: true,
-          content: [
-            {
-              type: 'text',
-              text: `Invalid parameter 'action': '${action}' is not allowed for '${toolName}'. Permitted: [${(toolDef.allowed_actions || []).join(', ')}].`
-            }
-          ]
-        };
-      }
-
-      if (!filename) {
-        console.warn(`[MCP-EVAL] ❌ Missing required parameter 'filename'.`);
-        return {
-          isError: true,
-          content: [
-            {
-              type: 'text',
-              text: `Missing required parameter 'filename'.`
-            }
-          ]
-        };
-      }
 
     // In-Process Fine-Grained Policy (FGP) evaluation defined in tools.yaml
     if (Array.isArray(toolDef.fine_grained_policies) && toolDef.fine_grained_policies.length > 0) {
@@ -168,7 +156,7 @@ class DeclarativeEngine {
     try {
       let operationResult;
 
-      console.log(`[MCP-STORAGE] Step 4 (Storage): Executing JIT User-Delegation access for container='${container}', file='${filename}'...`);
+      console.log(`[MCP-STORAGE] Step 4 (Storage): Accessing container='${container}', file='${filename}' as the signed-in user (Azure RBAC decides)...`);
       if (action === 'read') {
         operationResult = await azureStorage.readBlob(container, filename, authContext);
       } else if (action === 'write') {
@@ -183,6 +171,7 @@ class DeclarativeEngine {
         action,
         container,
         filename,
+        requiredScope,
         decision: 'ALLOWED'
       };
 
@@ -203,7 +192,7 @@ class DeclarativeEngine {
               audit: {
                 userPrincipal: sub,
                 actingAgent: actSub,
-                authorizedScope: toolDef.required_scope
+                authorizedScope: requiredScope
               }
             }, null, 2)
           }
@@ -211,6 +200,15 @@ class DeclarativeEngine {
         audit: auditLog
       };
     } catch (storageErr) {
+      if (storageErr.code === 'INTERACTION_REQUIRED') {
+        const auditLog = { timestamp: new Date().toISOString(), principal: sub, actingAgent: actSub, requestedTool: toolName, decision: 'STEP_UP_REQUIRED' };
+        return {
+          isError: true,
+          stepUp: { required: true, claims: storageErr.claims },
+          content: [{ type: 'text', text: `Step-up required: ${storageErr.message}` }],
+          audit: auditLog
+        };
+      }
       const isCloudIamDenied = storageErr.statusCode === 403 || storageErr.message?.includes('403') || storageErr.message?.includes('AuthorizationPermissionMismatch');
       const auditLog = {
         timestamp: new Date().toISOString(),

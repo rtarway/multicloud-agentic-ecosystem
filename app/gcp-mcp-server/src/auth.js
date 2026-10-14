@@ -1,9 +1,12 @@
 // RFC 8693 Multi-Hop Delegated Actor Chain & Scope Authorization for GCP MCP Server
 // Grounds security enforcement in NIST SP 800-207 Zero Trust and MAESTRO Actor Lineage
+//
+// Phase 0 hardening: the user identity comes ONLY from the verified token (no caller-supplied
+// identity headers), the audience is mandatory and compared exactly, and the issuer is matched
+// against an exact list.
 
 const jwtUtil = require('./jwtUtil');
 
-const JWT_SECRET = process.env.JWT_SECRET || 'demo-obo-token-secret-key-2026';
 const GCP_PROJECT_ID = process.env.GCP_PROJECT_ID || 'wifdemoproject-507002';
 const GCP_PROJECT_NUMBER = process.env.GCP_PROJECT_NUMBER || '834200279688';
 
@@ -26,21 +29,38 @@ const EXPECTED_AUDIENCES = [
   '//iam.googleapis.com/locations/global/workforcePools/enterprise-workforce-pool/providers/keycloak-workforce-provider'
 ];
 
-const AUTHORIZED_SENDERS = [
-  'spiffe://example.org/ns/agent-system/sa/orchestrator-sa',
-  'spiffe://example.org/ns/azure/sa/azure-mcp-server',
-  'spiffe://example.org/ns/gcp/sa/gcp-mcp-sa',
-  'urn:agent:reasoning-engine:gemini-planner',
-  'agent-orchestrator-client',
-  `gcp-mcp-sa@${GCP_PROJECT_ID}.iam.gserviceaccount.com`
-];
+// Exact identities only: no prefix or substring matching. ALLOWED_ACTORS (comma-separated) replaces this list.
+const AUTHORIZED_SENDERS = process.env.ALLOWED_ACTORS
+  ? process.env.ALLOWED_ACTORS.split(',').map(a => a.trim()).filter(Boolean)
+  : [
+    'spiffe://example.org/ns/agent-system/sa/orchestrator-sa',
+    'spiffe://example.org/ns/azure/sa/azure-mcp-server',
+    'urn:agent:reasoning-engine:gemini-planner'
+  ];
+
+const INSECURE_ALGORITHMS = new Set(['HS256', 'HS384', 'HS512', 'NONE']);
+
+function peekAlgorithm(token) {
+  try {
+    const parts = token.split('.');
+    if (parts.length < 2) return null;
+    const header = JSON.parse(jwtUtil.base64UrlDecode(parts[0]));
+    return typeof header.alg === 'string' ? header.alg.toUpperCase() : null;
+  } catch {
+    return null;
+  }
+}
 
 /**
  * Extracts and cryptographically verifies the multi-hop RFC 8693 OBO token.
- * Enforces Google Cloud IAM protection (iss: https://accounts.google.com / Google STS).
- * Traverses recursive 'act' chain to ensure full lineage integrity.
+ * The principal is taken from the verified token only. The optional second argument is accepted for
+ * backward compatibility and ignored (a caller-supplied identity header must never override the token).
  */
-function verifyGcpOboToken(authHeader, delegatedHeader) {
+function verifyGcpOboToken(authHeader, ignoredDelegatedHeader) {
+  if (ignoredDelegatedHeader) {
+    console.warn('[GCP-MCP-AUTH] ⚠️ Ignoring caller-supplied X-Delegated-Identity; the user is taken from the verified token only.');
+  }
+
   if (!authHeader || !authHeader.startsWith('Bearer ')) {
     return {
       authenticated: false,
@@ -51,28 +71,20 @@ function verifyGcpOboToken(authHeader, delegatedHeader) {
   const token = authHeader.substring(7).trim();
 
   try {
+    // Reject symmetric / unsigned tokens outright (no shared secret exists on this server).
+    const alg = peekAlgorithm(token);
+    if (alg && INSECURE_ALGORITHMS.has(alg)) {
+      console.warn(`[GCP-MCP-AUTH] 🚨 REJECTED: Insecure '${alg}' token presented as Google Cloud IAM. RFC 7515 RS256 PKI is required.`);
+      return {
+        authenticated: false,
+        error: 'Security Policy Violation: Insecure symmetric HMAC signature rejected. GCP MCP Server requires authentic Google Cloud IAM RS256 PKI.'
+      };
+    }
+
     let decoded;
-    let verificationMethod = 'NONE';
-    // Strictly verify token using Google STS / Cloud IAM Asymmetric Public Key (RS256 PKI)
     try {
       decoded = jwtUtil.verifyGoogleIamToken(token);
-      verificationMethod = 'GOOGLE_STS_RS256_PKI';
     } catch (rs256Err) {
-      // If RS256 fails, check if the token attempts symmetric HMAC forgery
-      try {
-        const hmacDecoded = jwtUtil.verify(token, JWT_SECRET);
-        if (hmacDecoded) {
-          console.warn(`[GCP-MCP-AUTH] 🚨 REJECTED: Insecure symmetric HMAC token detected claiming to be Google Cloud IAM! RFC 7515 RS256 PKI is required.`);
-          return {
-            authenticated: false,
-            error: 'Security Policy Violation: Insecure symmetric HMAC signature rejected. GCP MCP Server requires authentic Google Cloud IAM RS256 PKI.'
-          };
-        }
-      } catch {
-        // Not valid HMAC either
-      }
-
-      // Check if it can be decoded at all
       const peek = jwtUtil.decode(token);
       if (!peek) {
         return {
@@ -93,17 +105,10 @@ function verifyGcpOboToken(authHeader, delegatedHeader) {
       };
     }
 
-    // 1. Google Cloud IAM Token Issuer Verification (Zero Trust Cloud IAM Protection)
+    // 1. Issuer verification (exact match)
     const tokenIss = decoded.iss;
-    const isGoogleIamIssuer = tokenIss && (
-      tokenIss === 'https://accounts.google.com' ||
-      tokenIss === 'https://sts.googleapis.com' ||
-      tokenIss.includes('googleapis.com') ||
-      VALID_GCP_ISSUERS.includes(tokenIss)
-    );
-
-    if (!isGoogleIamIssuer) {
-      console.warn(`[GCP-MCP-AUTH] ❌ Token issuer verification failed. Received issuer: '${tokenIss}'. GCP MCP Server is strictly protected by Google Cloud IAM, not Keycloak!`);
+    if (!tokenIss || !VALID_GCP_ISSUERS.includes(tokenIss)) {
+      console.warn(`[GCP-MCP-AUTH] ❌ Token issuer verification failed. Received issuer: '${tokenIss}'.`);
       return {
         authenticated: false,
         error: `Token issuer verification failed: GCP MCP Server is protected by Google Cloud IAM (expected 'https://accounts.google.com' or Google STS). Received untrusted issuer: '${tokenIss}'. Keycloak tokens are not accepted.`
@@ -111,10 +116,15 @@ function verifyGcpOboToken(authHeader, delegatedHeader) {
     }
     console.log(`[GCP-MCP-AUTH] ✅ Google Cloud IAM Issuer verified: ${tokenIss}`);
 
-    // 2. Audience Verification (NIST SP 800-63C Strict Audience Restriction)
-    const tokenAud = Array.isArray(decoded.aud) ? decoded.aud : [decoded.aud];
-    const hasValidAud = tokenAud.some(a => EXPECTED_AUDIENCES.includes(a) || (typeof a === 'string' && (a.includes('gcp') || a.includes('run.app'))));
-    if (!hasValidAud && decoded.aud) {
+    // 2. Audience verification (mandatory, exact match)
+    const tokenAud = (Array.isArray(decoded.aud) ? decoded.aud : [decoded.aud]).filter(a => typeof a === 'string' && a);
+    if (tokenAud.length === 0) {
+      return {
+        authenticated: false,
+        error: 'Token audience verification failed: the aud claim is required.'
+      };
+    }
+    if (!tokenAud.some(a => EXPECTED_AUDIENCES.includes(a))) {
       console.warn(`[GCP-MCP-AUTH] ❌ Audience check failed. Received: ${JSON.stringify(decoded.aud)}, Expected one of: [${EXPECTED_AUDIENCES.join(', ')}]`);
       return {
         authenticated: false,
@@ -145,10 +155,7 @@ function verifyGcpOboToken(authHeader, delegatedHeader) {
 
     // Immediate presenter is actorChain[0] or default orchestrator
     const immediateActor = actorChain[0] || decoded.act?.sub;
-    const isSenderTrusted = !immediateActor ||
-      AUTHORIZED_SENDERS.includes(immediateActor) ||
-      immediateActor.startsWith('spiffe://example.org/ns/') ||
-      immediateActor.startsWith('urn:agent:');
+    const isSenderTrusted = !immediateActor || AUTHORIZED_SENDERS.includes(immediateActor);
 
     if (!isSenderTrusted) {
       console.warn(`[GCP-MCP-AUTH] ❌ Immediate sender verification failed: untrusted actor '${immediateActor}'`);
@@ -160,10 +167,7 @@ function verifyGcpOboToken(authHeader, delegatedHeader) {
 
     // Verify all upstream actors in the recursive chain are legitimate
     for (const actor of actorChain) {
-      const isTrusted = AUTHORIZED_SENDERS.includes(actor) ||
-        actor.startsWith('spiffe://example.org/ns/') ||
-        actor.startsWith('urn:agent:') ||
-        actor.includes('azure-mcp');
+      const isTrusted = AUTHORIZED_SENDERS.includes(actor);
 
       if (!isTrusted) {
         console.warn(`[GCP-MCP-AUTH] ❌ Untrusted actor detected in RFC 8693 multi-hop chain: '${actor}'`);
@@ -176,7 +180,7 @@ function verifyGcpOboToken(authHeader, delegatedHeader) {
 
     console.log(`[GCP-MCP-AUTH] ✅ RFC 8693 Multi-Hop Actor chain verified: [${(actorChain.length ? actorChain : ['authorized-agent']).join(' -> ')}]`);
 
-    // 3. Scopes & Entitlements Resolution
+    // 4. Scopes & Entitlements Resolution
     let scopes = [];
     if (typeof decoded.scope === 'string') {
       scopes = decoded.scope.split(' ').filter(Boolean);
@@ -201,32 +205,12 @@ function verifyGcpOboToken(authHeader, delegatedHeader) {
     }
     console.log(`[GCP-MCP-AUTH] ✅ Scopes resolved: [${scopes.join(', ')}]`);
 
-    // 4. Resolve Delegated Human User Principal (Preserving sub principle)
-    let delegatedUser = {
+    // 5. Delegated human principal: taken from the verified token only
+    const delegatedUser = {
       sub: decoded.sub || 'anonymous-user',
       email: decoded.email || decoded.preferred_username || decoded.sub || 'anonymous-user',
-      roles: roles
+      roles
     };
-
-    if (delegatedHeader) {
-      try {
-        if (typeof delegatedHeader === 'string' && delegatedHeader.startsWith('{')) {
-          const parsed = JSON.parse(delegatedHeader);
-          delegatedUser.sub = parsed.sub || delegatedUser.sub;
-          delegatedUser.email = parsed.email || parsed.sub || delegatedUser.email;
-          if (Array.isArray(parsed.roles)) delegatedUser.roles = parsed.roles;
-        } else if (typeof delegatedHeader === 'string' && delegatedHeader.includes('.')) {
-          const parsedJwt = jwtUtil.decode(delegatedHeader);
-          if (parsedJwt) {
-            delegatedUser.sub = parsedJwt.sub || delegatedUser.sub;
-            delegatedUser.email = parsedJwt.email || parsedJwt.preferred_username || parsedJwt.sub || delegatedUser.email;
-            if (Array.isArray(parsedJwt.roles)) delegatedUser.roles = parsedJwt.roles;
-          }
-        }
-      } catch {
-        // Fall back to token claims
-      }
-    }
 
     console.log(`[GCP-MCP-AUTH] ✅ Delegated Human Principal: sub='${delegatedUser.sub}', email='${delegatedUser.email}', roles=[${delegatedUser.roles.join(', ')}]`);
 
@@ -254,5 +238,6 @@ function verifyGcpOboToken(authHeader, delegatedHeader) {
 module.exports = {
   verifyGcpOboToken,
   EXPECTED_AUDIENCES,
-  AUTHORIZED_SENDERS
+  AUTHORIZED_SENDERS,
+  VALID_GCP_ISSUERS
 };

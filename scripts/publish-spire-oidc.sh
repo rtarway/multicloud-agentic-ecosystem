@@ -8,12 +8,9 @@
 set -euo pipefail
 
 RESOURCE_GROUP="${AZURE_RESOURCE_GROUP:-rg-azure-wif-poc}"
-if [ -z "${AZURE_STORAGE_ACCOUNT:-}" ]; then
-  DETECTED_STORAGE=$(az storage account list --resource-group "$RESOURCE_GROUP" --query "[?starts_with(name, 'azwifstorage')].name | [0]" -o tsv 2>/dev/null || true)
-  STORAGE_ACCOUNT="${DETECTED_STORAGE:-azwifstoragepocrt}"
-else
-  STORAGE_ACCOUNT="$AZURE_STORAGE_ACCOUNT"
-fi
+# The public OIDC documents live in their OWN storage account (created by azure/main.tf) so the data account never
+# allows public access. Uploading needs a data role on this account (Storage Blob Data Contributor) for `az login`.
+STORAGE_ACCOUNT="${AZURE_OIDC_STORAGE_ACCOUNT:-azwifoidcpoc2026}"
 CONTAINER_NAME="spire-oidc"
 PERMANENT_ISSUER_URL="https://${STORAGE_ACCOUNT}.blob.core.windows.net/${CONTAINER_NAME}"
 
@@ -24,23 +21,13 @@ echo "    Container:       $CONTAINER_NAME"
 echo "    Permanent URL:   $PERMANENT_ISSUER_URL"
 echo "=========================================================="
 
-# 1. Ensure Azure Storage container exists with public blob read access
-echo "--> 1. Ensuring container '${CONTAINER_NAME}' exists with public read access..."
+# 1. The container (public blob read) is created by Terraform (azure/main.tf). Verify it exists.
+echo "--> 1. Checking container '${CONTAINER_NAME}' on '${STORAGE_ACCOUNT}'..."
 if command -v az >/dev/null 2>&1; then
-  # Allow public blob access on storage account if disabled
-  az storage account update \
-    --name "$STORAGE_ACCOUNT" \
-    --allow-blob-public-access true \
-    --output none 2>/dev/null || true
-
-  az storage container create \
-    --account-name "$STORAGE_ACCOUNT" \
-    --name "$CONTAINER_NAME" \
-    --public-access blob \
-    --auth-mode login \
-    --output table || true
+  az storage container show --account-name "$STORAGE_ACCOUNT" --name "$CONTAINER_NAME" --auth-mode login --output none \
+    || { echo "ERROR: container '${CONTAINER_NAME}' not found. Apply azure/ first (terraform -chdir=azure apply)." >&2; exit 1; }
 else
-  echo "WARN: Azure CLI 'az' not found. Ensure container '${CONTAINER_NAME}' is created manually with public blob access."
+  echo "WARN: Azure CLI 'az' not found. Ensure container '${CONTAINER_NAME}' exists with public blob read access."
 fi
 
 # 2. Extract public JWKS keys from running SPIRE cluster

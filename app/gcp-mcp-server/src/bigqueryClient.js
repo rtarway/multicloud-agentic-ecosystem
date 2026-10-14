@@ -4,12 +4,39 @@
 
 const https = require('https');
 const http = require('http');
-const fs = require('fs');
+const { isSimulation, requireSimulation } = require('./simulation');
 
 const GCP_PROJECT_ID = process.env.GCP_PROJECT_ID || 'wifdemoproject-507002';
 const GCP_DATASET_ANALYTICS = process.env.GCP_DATASET_ANALYTICS || 'analytics_data';
 const GCP_DATASET_AUDIT = process.env.GCP_DATASET_AUDIT || 'audit_logs';
 const GCP_LIVE_MODE = process.env.GCP_LIVE_MODE !== 'false';
+
+// Identifiers are interpolated into the SQL text (BigQuery cannot parameterize table names), so they
+// must be constrained to a safe character set. Values (region, ...) are always sent as query parameters.
+const SAFE_PROJECT_ID = /^[a-z][a-z0-9-]{4,28}[a-z0-9]$/;
+const SAFE_DATASET_ID = /^[A-Za-z0-9_]{1,1024}$/;
+const ALLOWED_REGIONS = ['north-america', 'emea', 'apac', 'latam'];
+
+function assertSafeIdentifiers(projectId, dataset) {
+  if (!SAFE_PROJECT_ID.test(projectId)) throw new Error('Invalid GCP project identifier.');
+  if (!SAFE_DATASET_ID.test(dataset)) throw new Error('Invalid BigQuery dataset identifier.');
+}
+
+/**
+ * Builds the sales query. The region is passed as a named query parameter, never concatenated.
+ */
+function buildSalesQuery(projectId, dataset, region) {
+  assertSafeIdentifiers(projectId, dataset);
+  if (!ALLOWED_REGIONS.includes(region)) {
+    throw new Error(`Region '${region}' is not an allowed analytics region.`);
+  }
+  return {
+    query: `SELECT quarter, region, total_revenue, active_accounts, churn_risk FROM \`${projectId}.${dataset}.regional_sales\` WHERE region = @region LIMIT 10`,
+    queryParameters: [
+      { name: 'region', parameterType: { type: 'STRING' }, parameterValue: { value: region } }
+    ]
+  };
+}
 
 class BigQueryClient {
   constructor() {
@@ -19,10 +46,12 @@ class BigQueryClient {
   /**
    * Executes a live query via Google Cloud BigQuery REST API
    */
-  async _executeLiveBigQueryRest(query, accessToken, labels = {}) {
+  async _executeLiveBigQueryRest(query, accessToken, labels = {}, queryParameters = []) {
     const postData = JSON.stringify({
       query,
       useLegacySql: false,
+      parameterMode: 'NAMED',
+      queryParameters,
       timeoutMs: 15000,
       labels
     });
@@ -113,6 +142,10 @@ class BigQueryClient {
 
     console.log(`[GCP-BigQuery] 🔍 Executing query on dataset '${GCP_DATASET_ANALYTICS}' for principal '${sub}' (Region: ${region}, Metric: ${metric})...`);
 
+    if (!ALLOWED_REGIONS.includes(region)) {
+      throw new Error(`Region '${region}' is not an allowed analytics region.`);
+    }
+
     const jobLabels = {
       delegated_user: (authContext.email || sub || 'unknown').replace(/[^a-z0-9_-]/gi, '_').toLowerCase(),
       actor_orchestrator: 'orchestrator_sa',
@@ -126,8 +159,8 @@ class BigQueryClient {
     if (GCP_LIVE_MODE && liveToken) {
       try {
         console.log(`[GCP-BigQuery] 🌐 Executing LIVE query against Google BigQuery in project '${this.projectId}'...`);
-        const sql = `SELECT quarter, region, total_revenue, active_accounts, churn_risk FROM \`${this.projectId}.${GCP_DATASET_ANALYTICS}.regional_sales\` WHERE region = '${region}' LIMIT 10`;
-        const bqResult = await this._executeLiveBigQueryRest(sql, liveToken, jobLabels);
+        const { query: sql, queryParameters } = buildSalesQuery(this.projectId, GCP_DATASET_ANALYTICS, region);
+        const bqResult = await this._executeLiveBigQueryRest(sql, liveToken, jobLabels, queryParameters);
 
         const rows = (bqResult.rows || []).map(r => ({
           quarter: r.f[0]?.v,
@@ -162,9 +195,13 @@ class BigQueryClient {
           ]
         };
       } catch (err) {
-        console.warn(`[GCP-BigQuery] ⚠️ Live query encountered error (${err.message}). Falling back to simulation fixture.`);
+        if (!isSimulation()) throw err;
+        console.warn(`[GCP-BigQuery] ⚠️ Live query encountered error (${err.message}). Falling back to simulation fixture (demo profile).`);
       }
     }
+
+    // No live credential / live mode off: fixtures are served only in the demo profile.
+    requireSimulation('BigQuery sales fixture (no live Google credential)');
 
     // Deterministic analytics records aligned with enterprise data (Simulation / hermetic testing)
     const analyticsDatabase = {
@@ -256,6 +293,9 @@ class BigQueryClient {
       throw err;
     }
 
+    // Audit records below are fixtures; they must never be served outside the demo profile.
+    requireSimulation('BigQuery audit-log fixture (live audit query not implemented)');
+
     console.log(`[GCP-BigQuery] 🛡️ Fetching Audit Logs for Admin principal '${sub}' (TimeRange: ${timeRange})...`);
 
     return {
@@ -292,3 +332,5 @@ class BigQueryClient {
 }
 
 module.exports = new BigQueryClient();
+module.exports.buildSalesQuery = buildSalesQuery;
+module.exports.ALLOWED_REGIONS = ALLOWED_REGIONS;

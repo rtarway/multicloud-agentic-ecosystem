@@ -43,9 +43,22 @@ spec:
           ports:
             - containerPort: 3001
               name: http
+          envFrom:
+            - configMapRef:
+                name: oidc-config
+                optional: true
+            - configMapRef:
+                name: entra-config
+                optional: true
           env:
             - name: PORT
               value: "3001"
+            - name: ORCHESTRATOR_CLIENT_SECRET
+              valueFrom:
+                secretKeyRef:
+                  name: orchestrator-oidc
+                  key: ORCHESTRATOR_CLIENT_SECRET
+                  optional: true
             - name: MCP_SERVER_URL
               valueFrom:
                 configMapKeyRef:
@@ -66,8 +79,28 @@ spec:
               value: "/run/spire/sockets/agent.sock"
             - name: AGENT_SPIFFE_ID
               value: "spiffe://example.org/ns/agent-system/sa/orchestrator-sa"
+            # DEMO PROFILE: identity is simulated. Remove ALLOW_SIMULATION to run the (not yet complete) real path.
+            - name: ALLOW_SIMULATION
+              value: "true"
+            - name: DEPLOYMENT_ENV
+              value: "demo"
+            - name: DEMO_AZURE_PRIVATE_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: demo-keys
+                  key: DEMO_AZURE_PRIVATE_KEY
+                  optional: true
+            - name: DEMO_GOOGLE_PRIVATE_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: demo-keys
+                  key: DEMO_GOOGLE_PRIVATE_KEY
+                  optional: true
 
           volumeMounts:
+            - name: identity-map
+              mountPath: /etc/identity
+              readOnly: true
             # Mount SPIRE Agent Workload API socket directly via SPIFFE CSI Driver
             - name: spiffe-workload-api
               mountPath: /run/spire/sockets
@@ -86,6 +119,10 @@ spec:
             initialDelaySeconds: 5
             periodSeconds: 10
       volumes:
+        - name: identity-map
+          configMap:
+            name: identity-map
+            optional: true
         - name: spiffe-workload-api
           csi:
             driver: "csi.spiffe.io"

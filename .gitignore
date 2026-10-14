@@ -17,3 +17,12 @@ coverage/
 scratch/
 dist/
 build/
+
+# Demo-only signing keys and local secrets (never commit)
+.demo-keys/
+.env.*
+*.pem
+*.key
+*.auto.tfvars
+terraform.tfvars
+!certs/*.cer

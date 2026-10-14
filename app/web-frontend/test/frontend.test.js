@@ -1,6 +1,9 @@
 // Unit and Integration Tests for Web Frontend (Kept Outside SPIRE)
 // Uses Node.js native test runner (node:test, node:assert)
 
+// Demo profile: the demo login is only available when simulation is explicitly enabled.
+process.env.ALLOW_SIMULATION = 'true';
+
 const { test, describe, before } = require('node:test');
 const assert = require('node:assert');
 const { Readable, Writable } = require('stream');
@@ -210,5 +213,44 @@ describe('Web Frontend Tests (Outside SPIRE)', () => {
     assert.strictEqual(res.body.status, 'DISPATCHED_TO_AGENT');
     assert.strictEqual(res.body.prompt, 'Audit app1 container');
     assert.strictEqual(res.body.tokenReceived, true);
+  });
+
+  test('Demo login and the demo user list are disabled (503) unless ALLOW_SIMULATION=true', async () => {
+    const previous = process.env.ALLOW_SIMULATION;
+    process.env.ALLOW_SIMULATION = 'false';
+    try {
+      const login = await invokeApp(app, { method: 'POST', url: '/api/login', body: { userType: 'admin' } });
+      assert.strictEqual(login.statusCode, 503);
+      assert.strictEqual(login.body.error, 'LOGIN_DISABLED');
+      assert.ok(!login.body.token && !login.body.keycloakToken && !login.body.entraToken && !login.body.googleIamToken);
+
+      const users = await invokeApp(app, { method: 'GET', url: '/api/users' });
+      assert.strictEqual(users.statusCode, 503);
+      assert.ok(!JSON.stringify(users.body).includes('Password123'));
+    } finally {
+      process.env.ALLOW_SIMULATION = previous;
+    }
+  });
+
+  test('Demo tokens are signed with a per-process secret, never a hard-coded default', async () => {
+    const res = await invokeApp(app, { method: 'POST', url: '/api/login', body: { userType: 'bob' } });
+    const [header, payload, signature] = res.body.keycloakToken.split('.');
+    const crypto = require('crypto');
+    const forged = crypto.createHmac('sha256', 'demo-obo-token-secret-key-2026').update(`${header}.${payload}`).digest('base64url');
+    assert.notStrictEqual(signature, forged);
+  });
+
+  test('/api/chat never relays JWT-shaped credentials returned by the orchestrator', async () => {
+    const previous = app.locals.agentDispatcher;
+    const fakeJwt = 'eyJhbGciOiJSUzI1NiJ9.eyJzdWIiOiJhbGljZSJ9.c2lnbmF0dXJl';
+    app.locals.agentDispatcher = async () => ({ status: 'OK', hopToHop: { hop3: { rawToken: fakeJwt, note: `Bearer ${fakeJwt}` } } });
+    try {
+      const res = await invokeApp(app, { method: 'POST', url: '/api/chat', body: { prompt: 'hi', token: 't' } });
+      assert.strictEqual(res.statusCode, 200);
+      assert.ok(!JSON.stringify(res.body).includes('eyJ'));
+      assert.strictEqual(res.body.hopToHop.hop3.rawToken, '[REDACTED]');
+    } finally {
+      app.locals.agentDispatcher = previous;
+    }
   });
 });

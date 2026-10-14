@@ -1,4 +1,7 @@
 #!/usr/bin/env bash
+# DEPRECATED (Phase 3): superseded by terraform/identity/entra (manage_entra_apps=true) and azure/.
+# It creates a client-secret-era app model and role assignments for the agent identity that no longer apply.
+# Kept for reference only; do not use for new setups.
 # ==============================================================================
 # scripts/setup-entra-wif.sh
 # Automates Microsoft Entra ID (Azure AD) App Registrations, App Roles,

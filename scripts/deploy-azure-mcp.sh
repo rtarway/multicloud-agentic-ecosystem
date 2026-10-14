@@ -133,6 +133,16 @@ fi
 # Ensure AlwaysOn is enabled to prevent idle shutdown and 503 cold-start errors
 az webapp config set --name "$APP_NAME" --resource-group "$RESOURCE_GROUP" --always-on true --output none 2>/dev/null || true
 
+# 6b. Attach the user-assigned managed identity the MCP's Entra application trusts (no client secret is used).
+#     AZURE_MCP_IDENTITY_ID = `terraform -chdir=azure output -raw mcp_managed_identity_id`
+if [ -n "${AZURE_MCP_IDENTITY_ID:-}" ]; then
+  echo ""
+  echo "--> 4b. Assigning the managed identity to the Web App..."
+  az webapp identity assign --name "$APP_NAME" --resource-group "$RESOURCE_GROUP" --identities "$AZURE_MCP_IDENTITY_ID" --output none
+else
+  echo "   NOTE: AZURE_MCP_IDENTITY_ID is not set; the server cannot authenticate to Entra for the storage on-behalf-of exchange until a managed identity is assigned."
+fi
+
 # 7. Configure App Settings & Environment Variables
 echo ""
 echo "--> 5. Setting Environment Variables and Storage Configuration..."
@@ -145,11 +155,13 @@ az webapp config appsettings set \
     SCM_DO_BUILD_DURING_DEPLOYMENT=true \
     MCP_PROTOCOL_VERSION="2026-07-15" \
     AZURE_STORAGE_ACCOUNT="$STORAGE_ACCOUNT" \
-    JWT_SECRET="${JWT_SECRET:-demo-obo-token-secret-key-2026}" \
+    SPIRE_OIDC_ISSUER="${SPIRE_OIDC_ISSUER:-https://azwifoidcpoc2026.blob.core.windows.net/spire-oidc}" \
+    AZURE_MI_CLIENT_ID="${AZURE_MI_CLIENT_ID:-}" \
     ENTRA_TENANT_ID="${ENTRA_TENANT_ID:-81f26b58-159c-4879-80a0-bab30b5b4dd3}" \
     ENTRA_CLIENT_ID="${ENTRA_CLIENT_ID:-d5850aa0-a667-41c3-8dd0-16f2dee4da25}" \
     ENTRA_AUDIENCE="${ENTRA_AUDIENCE:-api://d5850aa0-a667-41c3-8dd0-16f2dee4da25}" \
     NODE_ENV="production" \
+    DEPLOYMENT_ENV="production" \
   --output table
 
 # 8. Package and Deploy Artifact

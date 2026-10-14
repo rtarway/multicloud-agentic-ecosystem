@@ -4,6 +4,8 @@
 const express = require('express');
 const DeclarativeEngine = require('./declarativeEngine');
 const { verifyOboToken } = require('./auth');
+const { assertStartupSafe } = require('./simulation');
+const { hasFederatedSource } = require('./federatedAssertion');
 
 const app = express();
 app.use(express.json());
@@ -87,7 +89,7 @@ app.post('/mcp', async (req, res) => {
     const correlationId = req.headers['x-correlation-id'] || req.headers['x-ms-client-request-id'] || ('chain-' + Date.now());
     console.log(`[MCP-RPC] Correlation ID: ${correlationId}`);
 
-    const authContext = await verifyOboToken(authHeader, delegatedHeader);
+    const authContext = await verifyOboToken(authHeader, delegatedHeader, req.headers['x-agent-identity']);
     authContext.correlationId = correlationId;
 
     if (!authContext.authenticated) {
@@ -143,7 +145,7 @@ app.get('/api/tools', (req, res) => {
 app.post('/api/tools/:name', async (req, res) => {
   const toolName = req.params.name;
   const authHeader = req.headers['authorization'];
-  const authContext = await verifyOboToken(authHeader);
+  const authContext = await verifyOboToken(authHeader, undefined, req.headers['x-agent-identity']);
 
   if (!authContext.authenticated) {
     return res.json({
@@ -158,6 +160,13 @@ app.post('/api/tools/:name', async (req, res) => {
 
 // Start Server if invoked directly
 if (require.main === module) {
+  assertStartupSafe('azure-mcp-server', {
+    realModeBlockers: [
+      ...(process.env.SPIRE_OIDC_ISSUER ? [] : ['SPIRE_OIDC_ISSUER is not set (the calling agent cannot be verified)']),
+      ...(hasFederatedSource() ? [] : ['no federated credential source (managed identity IDENTITY_ENDPOINT/IDENTITY_HEADER or AZURE_FEDERATED_TOKEN_FILE) for the storage on-behalf-of exchange']),
+      ...(process.env.ENTRA_TENANT_ID && process.env.ENTRA_CLIENT_ID ? [] : ['ENTRA_TENANT_ID and ENTRA_CLIENT_ID are not set'])
+    ]
+  });
   app.listen(PORT, () => {
     console.log(`===========================================================`);
     console.log(` Azure Low-Code Declarative MCP Server listening on ${PORT}`);

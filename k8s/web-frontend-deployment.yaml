@@ -26,13 +26,45 @@ spec:
           ports:
             - containerPort: 3000
               name: http
+          envFrom:
+            - configMapRef:
+                name: oidc-config
+                optional: true
+            - configMapRef:
+                name: entra-config
+                optional: true
           env:
             - name: PORT
               value: "3000"
+            - name: OIDC_CLIENT_ID
+              value: "web-frontend"
+            - name: OIDC_REDIRECT_URI
+              value: "http://localhost:3000/auth/callback"
             - name: AGENT_ORCHESTRATOR_URL
               value: "http://agent-orchestrator.agent-system.svc.cluster.local:3001"
             - name: KEYCLOAK_URL
               value: "http://keycloak-service.keycloak.svc.cluster.local:8080"
+            # DEMO PROFILE: identity is simulated. Remove ALLOW_SIMULATION to run the (not yet complete) real path.
+            - name: ALLOW_SIMULATION
+              value: "true"
+            - name: DEPLOYMENT_ENV
+              value: "demo"
+            - name: DEMO_AZURE_PRIVATE_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: demo-keys
+                  key: DEMO_AZURE_PRIVATE_KEY
+                  optional: true
+            - name: DEMO_GOOGLE_PRIVATE_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: demo-keys
+                  key: DEMO_GOOGLE_PRIVATE_KEY
+                  optional: true
+          volumeMounts:
+            - name: identity-map
+              mountPath: /etc/identity
+              readOnly: true
           resources:
             requests:
               cpu: 100m
@@ -46,6 +78,11 @@ spec:
               port: 3000
             initialDelaySeconds: 5
             periodSeconds: 10
+      volumes:
+        - name: identity-map
+          configMap:
+            name: identity-map
+            optional: true
 ---
 apiVersion: v1
 kind: Service

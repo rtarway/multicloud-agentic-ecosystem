@@ -1,8 +1,7 @@
 // Zero-dependency RFC 7519 / RFC 7515 / RFC 8693 JWT Utility using Node.js built-in crypto
 // Supports HS256 (HMAC symmetric) and RS256 (RSA asymmetric PKI)
 const crypto = require('crypto');
-const fs = require('fs');
-const path = require('path');
+const demoKeys = require('./demoKeys');
 
 function base64UrlEncode(str) {
   return Buffer.from(str)
@@ -155,48 +154,13 @@ function verifyRS256(token, publicKeyPem) {
   return payload;
 }
 
-// Cached Google STS keys
-let _googlePublicKey = null;
-let _googlePrivateKey = null;
-
+// Demo keys are only available when ALLOW_SIMULATION=true (see demoKeys.js); nothing is read from the repo.
 function getGoogleStsPublicKey() {
-  if (_googlePublicKey) return _googlePublicKey;
-  if (process.env.GOOGLE_STS_PUBLIC_KEY) {
-    _googlePublicKey = process.env.GOOGLE_STS_PUBLIC_KEY;
-    return _googlePublicKey;
-  }
-  const possiblePaths = [
-    path.resolve(__dirname, '../../../certs/google-sts-cert.pem'),
-    path.resolve(__dirname, '../../certs/google-sts-cert.pem'),
-    path.resolve(process.cwd(), 'certs/google-sts-cert.pem')
-  ];
-  for (const certPath of possiblePaths) {
-    if (fs.existsSync(certPath)) {
-      _googlePublicKey = fs.readFileSync(certPath, 'utf8');
-      return _googlePublicKey;
-    }
-  }
-  return null;
+  return demoKeys.getDemoKey('google', 'public');
 }
 
 function getGoogleStsPrivateKey() {
-  if (_googlePrivateKey) return _googlePrivateKey;
-  if (process.env.GOOGLE_STS_PRIVATE_KEY) {
-    _googlePrivateKey = process.env.GOOGLE_STS_PRIVATE_KEY;
-    return _googlePrivateKey;
-  }
-  const possiblePaths = [
-    path.resolve(__dirname, '../../../certs/google-sts-key.pem'),
-    path.resolve(__dirname, '../../certs/google-sts-key.pem'),
-    path.resolve(process.cwd(), 'certs/google-sts-key.pem')
-  ];
-  for (const keyPath of possiblePaths) {
-    if (fs.existsSync(keyPath)) {
-      _googlePrivateKey = fs.readFileSync(keyPath, 'utf8');
-      return _googlePrivateKey;
-    }
-  }
-  return null;
+  return demoKeys.getDemoKey('google', 'private');
 }
 
 /**
@@ -205,7 +169,7 @@ function getGoogleStsPrivateKey() {
 function verifyGoogleIamToken(token) {
   const pubKey = getGoogleStsPublicKey();
   if (!pubKey) {
-    throw new Error('Google STS public verification key not found. Ensure certs/google-sts-cert.pem is configured.');
+    throw new Error('Demo Google STS verification key unavailable (simulation disabled).');
   }
   return verifyRS256(token, pubKey);
 }
@@ -222,17 +186,7 @@ function decode(token) {
 }
 
 function getAzureTestPrivateKey() {
-  const possiblePaths = [
-    path.resolve(__dirname, '../../../certs/azure-test-key.pem'),
-    path.resolve(__dirname, '../../certs/azure-test-key.pem'),
-    path.resolve(process.cwd(), 'certs/azure-test-key.pem')
-  ];
-  for (const keyPath of possiblePaths) {
-    if (fs.existsSync(keyPath)) {
-      return fs.readFileSync(keyPath, 'utf8');
-    }
-  }
-  return null;
+  return demoKeys.getDemoKey('azure', 'private');
 }
 
 module.exports = {

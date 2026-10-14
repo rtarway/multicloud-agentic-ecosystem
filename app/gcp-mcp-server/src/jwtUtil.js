@@ -1,8 +1,7 @@
 // Zero-dependency RFC 7519 / RFC 7515 / RFC 8693 JWT Utility using Node.js built-in crypto
 // Supports HS256 (HMAC symmetric) and RS256 (RSA asymmetric PKI)
 const crypto = require('crypto');
-const fs = require('fs');
-const path = require('path');
+const demoKeys = require('./demoKeys');
 
 function base64UrlEncode(str) {
   return Buffer.from(str)
@@ -155,26 +154,9 @@ function verifyRS256(token, publicKeyPem) {
   return payload;
 }
 
-// Cached Google STS public key / cert
-let _googlePublicKey = null;
+// Demo keys are only available when ALLOW_SIMULATION=true (see demoKeys.js); nothing is read from the repo.
 function getGoogleStsPublicKey() {
-  if (_googlePublicKey) return _googlePublicKey;
-  if (process.env.GOOGLE_STS_PUBLIC_KEY) {
-    _googlePublicKey = process.env.GOOGLE_STS_PUBLIC_KEY;
-    return _googlePublicKey;
-  }
-  const possiblePaths = [
-    path.resolve(__dirname, '../../../certs/google-sts-cert.pem'),
-    path.resolve(__dirname, '../../certs/google-sts-cert.pem'),
-    path.resolve(process.cwd(), 'certs/google-sts-cert.pem')
-  ];
-  for (const certPath of possiblePaths) {
-    if (fs.existsSync(certPath)) {
-      _googlePublicKey = fs.readFileSync(certPath, 'utf8');
-      return _googlePublicKey;
-    }
-  }
-  return null;
+  return demoKeys.getDemoKey('google', 'public');
 }
 
 /**
@@ -183,7 +165,7 @@ function getGoogleStsPublicKey() {
 function verifyGoogleIamToken(token) {
   const pubKey = getGoogleStsPublicKey();
   if (!pubKey) {
-    throw new Error('Google STS public verification key not found. Ensure certs/google-sts-cert.pem is configured.');
+    throw new Error('Demo Google STS verification key unavailable (simulation disabled); real Google credentials are not verified by this server yet.');
   }
   return verifyRS256(token, pubKey);
 }
