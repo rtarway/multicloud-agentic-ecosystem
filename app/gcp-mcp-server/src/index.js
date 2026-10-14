@@ -6,6 +6,7 @@ const express = require('express');
 const DeclarativeEngine = require('./declarativeEngine');
 const { verifyGcpOboToken } = require('./auth');
 const { assertStartupSafe } = require('./simulation');
+const { readStrictConfig, isStrictConfigured, createStrictAuthenticator } = require('./strictAuth');
 
 const app = express();
 app.use(express.json());
@@ -14,6 +15,17 @@ const PORT = process.env.PORT || 8081;
 const PROTOCOL_VERSION = process.env.MCP_PROTOCOL_VERSION || '2026-07-15';
 
 const engine = new DeclarativeEngine();
+
+// Strict mode (OIDC_ISSUER set): IdP-issued access token + SPIRE JWT-SVID. Otherwise the legacy demo verification
+// (only usable with ALLOW_SIMULATION=true). Misconfiguration throws at startup.
+const strictConfig = readStrictConfig();
+app.locals.strictAuthenticator = isStrictConfigured(strictConfig) ? createStrictAuthenticator({ config: strictConfig }) : null;
+
+/** Authenticates a request on whichever path is configured. Never mixes the two. */
+async function authenticateRequest(headers) {
+  if (app.locals.strictAuthenticator) return app.locals.strictAuthenticator.authenticate(headers);
+  return verifyGcpOboToken(headers['authorization'], headers['x-delegated-identity']);
+}
 
 // Health probe for Cloud Run, GKE, and local Kubernetes
 const healthHandler = (req, res) => {
@@ -93,7 +105,7 @@ app.post('/mcp', async (req, res) => {
     const correlationId = req.headers['x-correlation-id'] || ('chain-' + Date.now());
     console.log(`[GCP-MCP-RPC] Correlation ID: ${correlationId}`);
 
-    const authContext = verifyGcpOboToken(authHeader, delegatedHeader);
+    const authContext = await authenticateRequest(req.headers);
     authContext.correlationId = correlationId;
 
     if (!authContext.authenticated) {
@@ -148,7 +160,7 @@ app.get('/api/tools', (req, res) => {
 app.post('/api/tools/:name', async (req, res) => {
   const toolName = req.params.name;
   const authHeader = req.headers['authorization'];
-  const authContext = verifyGcpOboToken(authHeader);
+  const authContext = await authenticateRequest(req.headers);
 
   if (!authContext.authenticated) {
     return res.json({
@@ -164,7 +176,9 @@ app.post('/api/tools/:name', async (req, res) => {
 if (require.main === module) {
   assertStartupSafe('gcp-mcp-server', {
     realModeBlockers: [
-      'real Google credential handling is not implemented yet (Phase 4: per-user Google OAuth grant); the server would otherwise accept only locally generated demo tokens'
+      // Request authentication is real (strict mode); calling BigQuery as the user needs the Phase 4 Google grant.
+      ...(app.locals.strictAuthenticator ? [] : ['OIDC_ISSUER is not set (IdP-issued tokens cannot be verified)']),
+      'real Google credential handling is not implemented yet (Phase 4: per-user Google OAuth grant)'
     ]
   });
   app.listen(PORT, '0.0.0.0', () => {

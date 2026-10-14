@@ -40,7 +40,7 @@ Google allows `http://localhost` redirect URIs for web clients, which is useful 
 3. Port-forward Keycloak: `kubectl -n keycloak port-forward svc/keycloak-service 8080:8080`.
 4. Load the Keycloak admin credentials. `install-infra.sh` generates them once into the git-ignored `.env.keycloak` (user `kcadmin`, random password); there is no default password. `source .env.keycloak` before running Terraform or the Keycloak scripts. Rotate the password in the admin console if you share the machine.
 
-**Planned change (decision D2 in the plan):** Keycloak 24.0.4 uses the legacy token-exchange preview. Phase 2 recommends 26.2 or later. Do not tune the exchange settings by hand until that is decided.
+**Keycloak version:** the cluster now runs Keycloak 26.2 or later (`var.keycloak_image`, default `quay.io/keycloak/keycloak:26.2.5`; confirm that tag is available to you or set another 26.2+ tag). That release provides supported standard token exchange, which the orchestrator uses. Do not enable the legacy `token-exchange` feature. `KC_HOSTNAME` is pinned to `var.keycloak_public_url` (default `http://localhost:8080`) so every token's `iss` is identical whether it was obtained through the browser or from inside the cluster; if you port-forward Keycloak to a different local port, set that variable and `OIDC_ISSUER` in `k8s/oidc-config.yaml` to match.
 
 Verify: `kubectl get pods -A` shows SPIRE, Istio and Keycloak pods running.
 
@@ -146,6 +146,17 @@ Creates the realm, groups, users (without credentials), one realm role per agent
 2. Confirm `web-frontend` has **Direct access grants** off and **Consent required** on.
 3. Confirm the account console lets a user see and revoke the agent's granted scopes.
 
+### 5.2b Connect the services to Keycloak (Phase 2)
+After the Keycloak apply:
+```bash
+./scripts/sync-orchestrator-secret.sh          # copies the orchestrator's client secret into the cluster and restarts it
+kubectl apply -f k8s/oidc-config.yaml          # issuer, JWKS/token endpoints, SPIRE issuer (install-infra.sh also does this)
+curl -s http://localhost:8080/realms/azure-wif-realm/.well-known/openid-configuration | head -c 300
+```
+The `iss` in that document must equal `OIDC_ISSUER` in `k8s/oidc-config.yaml` exactly. Open `http://localhost:3000`, choose **Sign in**, accept the consent screen, and the dashboard shows your identity and the scopes you consented to. The browser never holds a token.
+
+To inspect an exchanged token while debugging, decode it in the orchestrator logs' redacted output or request one yourself (standard token exchange against `/protocol/openid-connect/token` with the orchestrator client credentials). It must have exactly one `aud` (the MCP client id), exactly one `mcp:*`/`Mail.Send` scope, `act.sub` equal to the orchestrator's SPIFFE ID, and a lifetime of at most 5 minutes; the orchestrator rejects anything else.
+
 ### 5.3 Entra
 ```bash
 az login --tenant <tenant-id>
@@ -204,6 +215,13 @@ Check before every commit: `git status` shows no `.env*`, `*.tfvars`, `*.pem` or
 | Entra `AADSTS700211` / federated credential errors | The issuer URL or the subject does not match the federated credential exactly, or the OIDC discovery document is not public |
 | BigQuery 403 for a user who should have access | Role granted at project instead of dataset, wrong email bound, or `jobUser` missing |
 | Terraform `azuread` 403 | The identity lacks the Graph permissions in section 3.1 |
+| Orchestrator `BAD_ISSUER` | `OIDC_ISSUER` differs from the token's `iss` (port-forward on another port, or `KC_HOSTNAME` not applied). Compare with the discovery document |
+| Orchestrator `BAD_AUDIENCE` / `BAD_AUTHORIZED_PARTY` | The `agent-identity` scope's audience mapper is missing from `web-frontend`, or the token came from another client. Re-apply `terraform/identity/keycloak` |
+| `EXCHANGED_TOKEN_AUDIENCE` / `EXCHANGED_TOKEN_SCOPE` | Keycloak added an audience or an extra agent scope to the exchanged token. Check that the orchestrator client has only `profile` and `email` as default scopes and the agent scopes as optional scopes |
+| `EXCHANGED_TOKEN_ACTOR` | The `actor-spiffe-id` mapper is missing on the orchestrator client, or `orchestrator_spiffe_id` differs from the SVID's SPIFFE ID |
+| `IDP_EXCHANGE_REJECTED` (HTTP 400/401/403) | `standard.token.exchange.enabled` is off for the orchestrator client, the secret in `orchestrator-oidc` is stale (re-run `sync-orchestrator-secret.sh`), or the subject token does not list the orchestrator in `aud` |
+| `Cannot reach the SPIRE agent` | The SPIFFE CSI volume is not mounted at `/run/spire/sockets`, or the pod has no registration entry (check the SPIRE server's registered entries for the orchestrator service account) |
+| MCP server: `JWT-SVID rejected` | `SPIRE_OIDC_ISSUER` is wrong or unreachable from the pod, or the SVID audience differs from `SVID_AUDIENCE` (`gcp-mcp-server` / `azure-mcp-server`) |
 
 ## 9. Teardown
 

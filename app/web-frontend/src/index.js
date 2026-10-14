@@ -7,6 +7,7 @@ const path = require('path');
 const jwtUtil = require('./jwtUtil');
 const { isSimulation, getDemoSecret, assertStartupSafe } = require('./simulation');
 const { redactDeep } = require('./redact');
+const { readLoginConfig, createOidcLogin } = require('./oidcLogin');
 
 const app = express();
 app.use(express.json());
@@ -24,6 +25,45 @@ app.get('/healthz', (req, res) => {
     spireManaged: false, // Explicitly outside SPIRE
     agentEndpoint: AGENT_URL,
     keycloakEndpoint: KEYCLOAK_URL
+  });
+});
+
+// ---- real login: OIDC authorization code + PKCE, server-side session (BFF) ----
+const loginConfig = readLoginConfig();
+app.locals.oidcLogin = loginConfig ? createOidcLogin({ config: loginConfig }) : null;
+
+function authMode() {
+  if (app.locals.oidcLogin) return 'oidc';
+  return isSimulation() ? 'demo' : 'none';
+}
+
+app.get('/auth/login', (req, res) => {
+  if (!app.locals.oidcLogin) return res.status(503).json({ error: 'LOGIN_DISABLED', message: 'OIDC login is not configured (OIDC_ISSUER / OIDC_CLIENT_ID).' });
+  return app.locals.oidcLogin.login(req, res);
+});
+
+app.get('/auth/callback', async (req, res) => {
+  if (!app.locals.oidcLogin) return res.status(503).json({ error: 'LOGIN_DISABLED' });
+  return app.locals.oidcLogin.callback(req, res);
+});
+
+app.post('/auth/logout', (req, res) => {
+  const login = app.locals.oidcLogin;
+  if (!login) return res.status(503).json({ error: 'LOGIN_DISABLED' });
+  if (!login.sameOrigin(req)) return res.status(403).json({ error: 'CROSS_ORIGIN_REQUEST_REFUSED' });
+  return login.logout(req, res);
+});
+
+// What the browser may know: the auth mode and, when signed in, the user's identity and consented scopes (no tokens).
+app.get('/api/session', (req, res) => {
+  const mode = authMode();
+  const login = app.locals.oidcLogin;
+  const session = login ? login.getSession(req) : null;
+  res.json({
+    mode,
+    authenticated: Boolean(session),
+    signInUrl: login ? '/auth/login' : null,
+    user: session ? login.sessionInfo(session) : null
   });
 });
 
@@ -231,16 +271,30 @@ app.post('/api/login', requireDemoLogin, async (req, res) => {
 // Proxy Chat/Prompt to Agent Orchestrator
 app.post('/api/chat', async (req, res) => {
   const { prompt, userEntraToken, entraToken } = req.body || {};
-  const token = (req.body && req.body.token) || (req.headers.authorization ? req.headers.authorization.replace(/^Bearer\s+/i, '') : null);
   const activeEntraToken = userEntraToken || entraToken || req.headers['x-user-entra-token'] || null;
 
   if (!prompt) {
     return res.status(400).json({ error: 'Missing prompt.' });
   }
 
+  // The bearer token comes from the server-side session in OIDC mode; a token supplied by the browser is ignored.
+  // Without OIDC the legacy demo behaviour (token supplied by the page) exists only in the demo profile.
+  let token = null;
+  const login = app.locals.oidcLogin;
+  if (login) {
+    if (!login.sameOrigin(req)) return res.status(403).json({ error: 'CROSS_ORIGIN_REQUEST_REFUSED' });
+    const session = login.getSession(req);
+    if (!session) return res.status(401).json({ error: 'NOT_SIGNED_IN', signInUrl: '/auth/login' });
+    token = await login.accessTokenFor(session);
+    if (!token) return res.status(401).json({ error: 'SESSION_EXPIRED', signInUrl: '/auth/login' });
+  } else if (isSimulation()) {
+    token = (req.body && req.body.token) || (req.headers.authorization ? req.headers.authorization.replace(/^Bearer\s+/i, '') : null);
+  } else {
+    return res.status(503).json({ error: 'LOGIN_DISABLED', message: 'No login is configured and the demo profile is off.' });
+  }
+
   const payload = JSON.stringify({
     prompt,
-    token,
     userEntraToken: activeEntraToken,
     context: req.body && req.body.context,
     emailConfig: req.body && req.body.emailConfig
@@ -290,7 +344,9 @@ app.post('/api/chat', async (req, res) => {
 });
 
 if (require.main === module) {
-  assertStartupSafe('web-frontend');
+  assertStartupSafe('web-frontend', {
+    realModeBlockers: app.locals.oidcLogin ? [] : ['OIDC_ISSUER and OIDC_CLIENT_ID are not set (no way to sign users in)']
+  });
   app.listen(PORT, () => {
     console.log(`===========================================================`);
     console.log(` Web Frontend running on http://localhost:${PORT}`);

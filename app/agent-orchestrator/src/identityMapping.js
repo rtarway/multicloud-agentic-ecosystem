@@ -28,6 +28,7 @@ function loadDirectory(source) {
     throw new IdentityMappingError('DIRECTORY_INVALID', 'Identity directory must contain a users array.');
   }
 
+  const groupScopes = new Map((directory.groups || []).map(g => [g.id, g.agent_scopes || []]));
   const byKeycloakEmail = new Map();
   const seen = { entra: new Map(), google: new Map() };
   for (const user of directory.users) {
@@ -49,11 +50,12 @@ function loadDirectory(source) {
       seen[system].set(value, user.id);
     }
   }
-  return { directory, byKeycloakEmail };
+  return { directory, byKeycloakEmail, groupScopes };
 }
 
 function createResolver(source) {
-  const { directory, byKeycloakEmail } = loadDirectory(source);
+  const { directory, byKeycloakEmail, groupScopes } = loadDirectory(source);
+  const allAgentScopes = Object.freeze([...new Set([...groupScopes.values()].flat())].sort());
 
   /**
    * Resolves verified token claims to the user's identities.
@@ -84,7 +86,9 @@ function createResolver(source) {
       keycloakEmail: normalizeEmail(emails.keycloak),
       entraUpn: normalizeEmail(emails.entra_upn) || null,
       googleEmail: normalizeEmail(emails.google) || null,
-      groups: Object.freeze([...(user.groups || [])])
+      groups: Object.freeze([...(user.groups || [])]),
+      // Agent scopes this user is eligible to consent to, derived from group membership in the directory
+      agentScopes: Object.freeze([...new Set((user.groups || []).flatMap(g => groupScopes.get(g) || []))].sort())
     });
   }
 
@@ -114,7 +118,7 @@ function createResolver(source) {
       normalizeEmail(googleIdTokenClaims.email) === identity.googleEmail;
   }
 
-  return { resolveFromClaims, requireGoogleEmail, requireEntraUpn, googleAccountMatches, directory };
+  return { resolveFromClaims, requireGoogleEmail, requireEntraUpn, googleAccountMatches, directory, allAgentScopes };
 }
 
 module.exports = { createResolver, loadDirectory, IdentityMappingError, normalizeEmail };

@@ -26,6 +26,10 @@ spec:
           ports:
             - containerPort: 8081
               name: http
+          envFrom:
+            - configMapRef:
+                name: oidc-config
+                optional: true
           env:
             - name: PORT
               value: "8081"
@@ -49,6 +53,10 @@ spec:
                   name: demo-keys
                   key: DEMO_GOOGLE_PUBLIC_KEY
                   optional: true
+          volumeMounts:
+            - name: identity-map
+              mountPath: /etc/identity
+              readOnly: true
           resources:
             requests:
               cpu: 100m
@@ -62,6 +70,11 @@ spec:
               port: 8081
             initialDelaySeconds: 5
             periodSeconds: 10
+      volumes:
+        - name: identity-map
+          configMap:
+            name: identity-map
+            optional: true
 ---
 apiVersion: v1
 kind: Service

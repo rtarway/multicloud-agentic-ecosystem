@@ -108,6 +108,13 @@ docker build -t gcp-mcp-server:v1.0.0 "${ROOT_DIR}/app/gcp-mcp-server"
 echo "--> 5. Deploying microservices to Kubernetes..."
 kubectl apply -f "${ROOT_DIR}/k8s/namespaces.yaml"
 
+# Identity configuration: non-secret OIDC settings and the identity directory generated from identity/users.yaml.
+node "${ROOT_DIR}/scripts/identity-build-map.js" >/dev/null
+kubectl apply -f "${ROOT_DIR}/k8s/oidc-config.yaml"
+kubectl create configmap identity-map -n agent-system \
+  --from-file=identity-map.json="${ROOT_DIR}/identity/identity-map.json" \
+  --dry-run=client -o yaml | kubectl apply -f -
+
 # Demo profile only: throwaway signing keys shared by the simulated services (never committed; see .gitignore).
 echo "    Generating demo keys and creating the 'demo-keys' secret (demo profile)..."
 "${SCRIPT_DIR}/gen-demo-keys.sh" >/dev/null

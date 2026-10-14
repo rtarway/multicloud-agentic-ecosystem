@@ -26,9 +26,17 @@ spec:
           ports:
             - containerPort: 3000
               name: http
+          envFrom:
+            - configMapRef:
+                name: oidc-config
+                optional: true
           env:
             - name: PORT
               value: "3000"
+            - name: OIDC_CLIENT_ID
+              value: "web-frontend"
+            - name: OIDC_REDIRECT_URI
+              value: "http://localhost:3000/auth/callback"
             - name: AGENT_ORCHESTRATOR_URL
               value: "http://agent-orchestrator.agent-system.svc.cluster.local:3001"
             - name: KEYCLOAK_URL

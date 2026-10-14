@@ -22,8 +22,8 @@ rather than use simulated SPIRE identities, locally signed tokens or in-memory d
 - Demo signing keys are never committed. They are generated in memory per process, or on disk with
   `scripts/gen-demo-keys.sh` (git-ignored `.demo-keys/`).
 - `DEPLOYMENT_ENV=production` forbids the demo profile.
-- Real-mode identity (OIDC login, SPIRE, per-cloud user delegation) is being built in the phases of
-  [`docs/security-remediation-plan.md`](./docs/security-remediation-plan.md).
+- Real-mode identity is being built in the phases of
+  [`docs/security-remediation-plan.md`](./docs/security-remediation-plan.md). Phases 0-2 are done: no fake credentials outside the demo profile, a seeded identity directory, and verified OIDC login (code + PKCE), SPIRE JWT-SVIDs and RFC 8693 token exchange at the IdP. Azure user delegation (Phase 3) and Google user grants (Phase 4) are next.
 
 ### 1. Run the Automated Verification Suite
 ```bash

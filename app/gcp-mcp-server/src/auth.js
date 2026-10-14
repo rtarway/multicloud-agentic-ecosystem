@@ -29,14 +29,14 @@ const EXPECTED_AUDIENCES = [
   '//iam.googleapis.com/locations/global/workforcePools/enterprise-workforce-pool/providers/keycloak-workforce-provider'
 ];
 
-const AUTHORIZED_SENDERS = [
-  'spiffe://example.org/ns/agent-system/sa/orchestrator-sa',
-  'spiffe://example.org/ns/azure/sa/azure-mcp-server',
-  'spiffe://example.org/ns/gcp/sa/gcp-mcp-sa',
-  'urn:agent:reasoning-engine:gemini-planner',
-  'agent-orchestrator-client',
-  `gcp-mcp-sa@${GCP_PROJECT_ID}.iam.gserviceaccount.com`
-];
+// Exact identities only: no prefix or substring matching. ALLOWED_ACTORS (comma-separated) replaces this list.
+const AUTHORIZED_SENDERS = process.env.ALLOWED_ACTORS
+  ? process.env.ALLOWED_ACTORS.split(',').map(a => a.trim()).filter(Boolean)
+  : [
+    'spiffe://example.org/ns/agent-system/sa/orchestrator-sa',
+    'spiffe://example.org/ns/azure/sa/azure-mcp-server',
+    'urn:agent:reasoning-engine:gemini-planner'
+  ];
 
 const INSECURE_ALGORITHMS = new Set(['HS256', 'HS384', 'HS512', 'NONE']);
 
@@ -155,10 +155,7 @@ function verifyGcpOboToken(authHeader, ignoredDelegatedHeader) {
 
     // Immediate presenter is actorChain[0] or default orchestrator
     const immediateActor = actorChain[0] || decoded.act?.sub;
-    const isSenderTrusted = !immediateActor ||
-      AUTHORIZED_SENDERS.includes(immediateActor) ||
-      immediateActor.startsWith('spiffe://example.org/ns/') ||
-      immediateActor.startsWith('urn:agent:');
+    const isSenderTrusted = !immediateActor || AUTHORIZED_SENDERS.includes(immediateActor);
 
     if (!isSenderTrusted) {
       console.warn(`[GCP-MCP-AUTH] ❌ Immediate sender verification failed: untrusted actor '${immediateActor}'`);
@@ -170,10 +167,7 @@ function verifyGcpOboToken(authHeader, ignoredDelegatedHeader) {
 
     // Verify all upstream actors in the recursive chain are legitimate
     for (const actor of actorChain) {
-      const isTrusted = AUTHORIZED_SENDERS.includes(actor) ||
-        actor.startsWith('spiffe://example.org/ns/') ||
-        actor.startsWith('urn:agent:') ||
-        actor.includes('azure-mcp');
+      const isTrusted = AUTHORIZED_SENDERS.includes(actor);
 
       if (!isTrusted) {
         console.warn(`[GCP-MCP-AUTH] ❌ Untrusted actor detected in RFC 8693 multi-hop chain: '${actor}'`);

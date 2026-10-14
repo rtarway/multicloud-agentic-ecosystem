@@ -38,3 +38,9 @@ variable "offboard_users" {
   description = "User ids to disable (set by scripts/identity-offboard.js)"
   default     = []
 }
+
+variable "orchestrator_spiffe_id" {
+  type        = string
+  description = "SPIFFE ID of the orchestrator workload; stamped into act.sub of the tokens it obtains"
+  default     = "spiffe://example.org/ns/agent-system/sa/orchestrator-sa"
+}

@@ -1,4 +1,6 @@
 const jwtUtil = require('./jwtUtil');
+const { createJwksClient } = require('./oidc');
+const { verifySvid, SpiffeError } = require('./spiffe');
 
 const ENTRA_TENANT_ID = process.env.ENTRA_TENANT_ID || '81f26b58-159c-4879-80a0-bab30b5b4dd3';
 const ENTRA_MCP_APP_ID = process.env.ENTRA_CLIENT_ID || 'd5850aa0-a667-41c3-8dd0-16f2dee4da25';
@@ -8,11 +10,37 @@ const EXPECTED_AUDIENCES = [
   'mcp-azure-service',
   'azure-mcp-server'
 ];
-const AUTHORIZED_SENDERS = [
-  'a23206e1-2dda-4854-aac7-0536d2da2c4c', // k8s-agent-orchestrator Entra App ID
-  'agent-orchestrator-client',
-  'spiffe://example.org/ns/agent-system/sa/orchestrator-sa'
-];
+// Exact identities only: no prefix or substring matching. ALLOWED_ACTORS (comma-separated) replaces the list.
+const ORCHESTRATOR_SPIFFE_ID = 'spiffe://example.org/ns/agent-system/sa/orchestrator-sa';
+const AUTHORIZED_SENDERS = process.env.ALLOWED_ACTORS
+  ? process.env.ALLOWED_ACTORS.split(',').map(a => a.trim()).filter(Boolean)
+  : [
+    'a23206e1-2dda-4854-aac7-0536d2da2c4c', // k8s-agent-orchestrator Entra App ID
+    'agent-orchestrator-client',
+    ORCHESTRATOR_SPIFFE_ID,
+    'spiffe://example.org/ns/azure/sa/azure-mcp-server',
+    'urn:agent:reasoning-engine:gemini-planner'
+  ];
+
+// Agent identity proof (JWT-SVID). When SPIRE_OIDC_ISSUER is configured every request must carry a JWT-SVID for this
+// server, from an allowed workload; the Entra app (azp) must also be an authorized sender.
+const SPIRE_OIDC_ISSUER = process.env.SPIRE_OIDC_ISSUER || '';
+const SVID_AUDIENCE = process.env.SVID_AUDIENCE || 'azure-mcp-server';
+let agentVerifier = null;
+
+function getAgentVerifier() {
+  if (agentVerifier) return agentVerifier;
+  if (!SPIRE_OIDC_ISSUER) return null;
+  const jwks = createJwksClient({ issuer: SPIRE_OIDC_ISSUER, jwksUri: process.env.SPIRE_JWKS_URI || undefined });
+  const allowedSpiffeIds = AUTHORIZED_SENDERS.filter(a => a.startsWith('spiffe://'));
+  agentVerifier = token => verifySvid(token, { issuer: SPIRE_OIDC_ISSUER, audience: SVID_AUDIENCE, jwks, allowedSpiffeIds });
+  return agentVerifier;
+}
+
+/** Test seam: replaces the JWT-SVID verifier (pass null to restore the environment-derived one). */
+function setAgentVerifier(fn) {
+  agentVerifier = fn;
+}
 
 /**
  * Extracts and verifies the OBO token from authorization header.
@@ -21,7 +49,7 @@ const AUTHORIZED_SENDERS = [
  *   - Keycloak & Local OBO tokens for test environments
  *   - Delegated human user identity via X-Delegated-Identity header or token claim
  */
-async function verifyOboToken(authHeader, ignoredDelegatedHeader) {
+async function verifyOboToken(authHeader, ignoredDelegatedHeader, agentIdentityHeader) {
   if (ignoredDelegatedHeader) {
     console.warn('[MCP-AUTH] ⚠️ Ignoring caller-supplied X-Delegated-Identity; the user is taken from the verified token only.');
   }
@@ -110,11 +138,34 @@ async function verifyOboToken(authHeader, ignoredDelegatedHeader) {
       currAct = currAct.act;
     }
 
+    // Agent identity proof: the workload that is calling must prove its SPIFFE ID with a JWT-SVID for this server.
+    const verifier = getAgentVerifier();
+    if (verifier) {
+      if (!agentIdentityHeader) {
+        return { authenticated: false, error: 'Agent identity proof (X-Agent-Identity JWT-SVID) is required.' };
+      }
+      let svid;
+      try {
+        svid = await verifier(agentIdentityHeader);
+      } catch (err) {
+        return { authenticated: false, error: err instanceof SpiffeError ? err.message : `JWT-SVID verification failed: ${err.message}` };
+      }
+      if (actorChain.length > 0 && actorChain[0] !== svid.spiffeId) {
+        return {
+          authenticated: false,
+          error: `RFC 8693 chain verification failed: the token's actor '${actorChain[0]}' does not match the SPIFFE ID '${svid.spiffeId}' proven by the JWT-SVID.`
+        };
+      }
+      if (actorChain.length === 0) actorChain.push(svid.spiffeId);
+      if (!(tokenAzp && AUTHORIZED_SENDERS.includes(tokenAzp))) {
+        return { authenticated: false, error: `RFC 8693 chain verification failed: the calling application '${tokenAzp}' is not an authorized sender.` };
+      }
+    }
+
     const actorSub = actorChain[0] || decoded.act?.sub;
     const isValidSender =
       (tokenAzp && AUTHORIZED_SENDERS.includes(tokenAzp)) ||
-      (actorSub && (AUTHORIZED_SENDERS.includes(actorSub) || actorSub.startsWith('spiffe://example.org/ns/') || actorSub.startsWith('urn:agent:'))) ||
-      (!tokenAzp && !actorSub); // Allow if omitted in minimal tests
+      (actorSub && AUTHORIZED_SENDERS.includes(actorSub));
 
     if (!isValidSender) {
       console.warn(`[MCP-AUTH] ❌ Sender verification failed: unauthorized client '${tokenAzp || actorSub}'`);
@@ -126,7 +177,7 @@ async function verifyOboToken(authHeader, ignoredDelegatedHeader) {
 
     // Verify all actors in the recursive chain are trusted
     for (const actor of actorChain) {
-      const isTrusted = AUTHORIZED_SENDERS.includes(actor) || actor.startsWith('spiffe://example.org/ns/') || actor.startsWith('urn:agent:');
+      const isTrusted = AUTHORIZED_SENDERS.includes(actor);
       if (!isTrusted) {
         console.warn(`[MCP-AUTH] ❌ Untrusted actor in RFC 8693 chain: '${actor}'`);
         return {
@@ -207,5 +258,7 @@ async function verifyOboToken(authHeader, ignoredDelegatedHeader) {
 }
 
 module.exports = {
-  verifyOboToken
+  verifyOboToken,
+  setAgentVerifier,
+  AUTHORIZED_SENDERS
 };

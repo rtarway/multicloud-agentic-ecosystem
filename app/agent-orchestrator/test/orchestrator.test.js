@@ -712,16 +712,16 @@ describe('Phase 0: fail-closed identity handling', () => {
     }
   });
 
-  test('Chat is refused (503) when no real workload identity exists and simulation is off', withoutSimulation(async () => {
+  test('Chat is refused (503) when user tokens cannot be verified and simulation is off', withoutSimulation(async () => {
     const res = await invokeApp(app, {
       method: 'POST',
       url: '/api/agent/chat',
       headers: { Authorization: `Bearer ${mintKeycloakToken({ sub: 'bob@example.com' })}` },
       body: { prompt: 'Read the quarterly financial report from app1' }
     });
+    // Without simulation and without OIDC_ISSUER the orchestrator refuses to trust any bearer token
     assert.strictEqual(res.statusCode, 503);
-    assert.strictEqual(res.body.error, 'AGENT_IDENTITY_UNAVAILABLE');
-    assert.strictEqual(res.body.code, 'SIMULATION_DISABLED');
+    assert.strictEqual(res.body.error, 'AUTHENTICATION_NOT_CONFIGURED');
   }));
 
   test('SPIRE client refuses to mint a local SVID when simulation is off', withoutSimulation(async () => {

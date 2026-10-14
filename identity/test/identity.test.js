@@ -65,6 +65,7 @@ describe('identity mapping (fails closed)', () => {
     assert.strictEqual(identity.entraUpn, alice.emails.entra_upn);
     assert.strictEqual(identity.googleEmail, alice.emails.google);
     assert.ok(identity.groups.includes('agent-bigquery-audit'));
+    assert.deepStrictEqual([...identity.agentScopes], ['Mail.Send', 'mcp:bigquery:audit', 'mcp:bigquery:query', 'mcp:tool1', 'mcp:tool2']);
     assert.strictEqual(resolver.requireGoogleEmail(identity), alice.emails.google);
     assert.strictEqual(resolver.requireEntraUpn(identity), alice.emails.entra_upn);
   });
@@ -90,6 +91,14 @@ describe('identity mapping (fails closed)', () => {
 
   test('does not fall back to sub or preferred_username when email is absent', () => {
     assert.throws(() => resolver.resolveFromClaims({ sub: 'alice', preferred_username: 'alice', email_verified: true }), /IDENTITY_EMAIL_MISSING|no email claim/);
+  });
+
+  test('eligible agent scopes come from group membership only', () => {
+    const bob = resolver.resolveFromClaims(claimsFor(doc.users.find(u => u.id === 'bob')));
+    assert.deepStrictEqual([...bob.agentScopes], ['mcp:bigquery:query', 'mcp:tool1']);
+    const charlie = resolver.resolveFromClaims(claimsFor(doc.users.find(u => u.id === 'charlie')));
+    assert.deepStrictEqual([...charlie.agentScopes], ['mcp:tool1', 'mcp:tool2']);
+    assert.deepStrictEqual([...resolver.allAgentScopes], ['Mail.Send', 'mcp:bigquery:audit', 'mcp:bigquery:query', 'mcp:tool1', 'mcp:tool2']);
   });
 
   test('a user without a Google account never resolves a Google identity', () => {

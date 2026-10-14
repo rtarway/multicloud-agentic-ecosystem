@@ -7,6 +7,7 @@ const https = require('https');
 const querystring = require('querystring');
 const jwtUtil = require('./jwtUtil');
 const { isSimulation } = require('./simulation');
+const { ExchangeError } = require('./idpExchange');
 
 // Load .env if present
 try {
@@ -37,10 +38,17 @@ const GCP_PROJECT_NUMBER = process.env.GCP_PROJECT_NUMBER || '834200279688';
 const GCP_POOL_ID = process.env.GCP_POOL_ID || 'k8s-agent-pool';
 const GCP_PROVIDER_ID = process.env.GCP_PROVIDER_ID || 'spire-oidc-provider';
 const GCP_MCP_AUDIENCE = process.env.GCP_MCP_AUDIENCE || 'gcp-bigquery-mcp-server';
+// Client id of the GCP MCP server at the IdP: the single audience of tokens exchanged for BigQuery tools
+const GCP_MCP_CLIENT_ID = process.env.GCP_MCP_CLIENT_ID || 'mcp-gcp-service';
 const GCP_SERVICE_ACCOUNT = process.env.GCP_SERVICE_ACCOUNT || `gcp-mcp-sa@${GCP_PROJECT_ID}.iam.gserviceaccount.com`;
 
 
 class TokenExchangeEngine {
+  /** Injects the IdP exchange client (created at startup from the environment, or a fake in tests). */
+  setIdpClient(client) {
+    this.idpClient = client || null;
+  }
+
   /**
    * Performs HTTP request to Microsoft Entra ID Token Endpoint via WIF (RFC 7523)
    */
@@ -83,6 +91,52 @@ class TokenExchangeEngine {
   }
 
   /**
+   * Strict mode: obtains a token for ONE resource server and ONE agent scope from the identity provider.
+   * The orchestrator signs nothing; any failure is returned as an error and halts the step.
+   */
+  async _exchangeViaIdp({ verifiedUser, userEmail, userRoles, requestedTool, requiredScopeForTool, agentSpiffeId, recursiveAct, actorChain, userEligibleScopes, audience }) {
+    const failure = (code, message) => ({
+      isError: true,
+      status: 'EXCHANGE_FAILED',
+      code,
+      error: `${message} Refusing to fall back to a locally signed token.`,
+      tokenType: 'TOKEN_EXCHANGE_FAILED',
+      audit: { subject: userEmail, actor: agentSpiffeId, requestedTool, requiredScope: requiredScopeForTool, decision: 'EXCHANGE_FAILED', code }
+    });
+
+    if (!this.idpClient) return failure('IDP_NOT_CONFIGURED', 'The identity provider token-exchange client is not configured.');
+
+    try {
+      const result = await this.idpClient.exchange({
+        subjectToken: verifiedUser.token,
+        audience,
+        scope: requiredScopeForTool,
+        expectedActor: agentSpiffeId
+      });
+      return {
+        exchangedToken: result.token,
+        tokenType: 'IDP_TOKEN_EXCHANGE',
+        claims: result.claims,
+        delegatedUser: { sub: userEmail, email: userEmail, roles: userRoles },
+        audit: {
+          subject: userEmail,
+          actor: agentSpiffeId,
+          // Only the IdP-attested actor above is used for authorization downstream; the fuller lineage is informational.
+          unattestedLineage: actorChain,
+          userRoles,
+          eligibleScopes: userEligibleScopes,
+          grantedScopes: [requiredScopeForTool],
+          requestedTool,
+          tokenIssuer: 'Identity provider (RFC 8693 standard token exchange)'
+        },
+        lineage: recursiveAct
+      };
+    } catch (err) {
+      return failure(err instanceof ExchangeError ? err.code : 'IDP_EXCHANGE_FAILED', err.message);
+    }
+  }
+
+  /**
    * Constructs an RFC 8693 recursive actor chain reflecting multi-hop provenance
    */
   _buildRecursiveActorChain(agentSpiffeId, turn = 1, priorHops = []) {
@@ -120,7 +174,9 @@ class TokenExchangeEngine {
   /**
    * Executes Multi-Cloud RFC 8693 Token Exchange with Multi-Hop Lineage and Scope Downscoping
    */
-  async exchangeToken({ userToken, userEntraToken, agentSvid, targetAudience = ENTRA_AUDIENCE, requestedTool = 'tool1', priorHops = [], turn = 1 }) {
+  async exchangeToken({ userToken, verifiedUser = null, userEntraToken, agentSvid, targetAudience = ENTRA_AUDIENCE, requestedTool = 'tool1', priorHops = [], turn = 1 }) {
+    // verifiedUser is present in strict mode (user token verified against the IdP and mapped through the directory)
+    const strict = Boolean(verifiedUser);
     // 1. Validate & Parse Subject Token (User from Keycloak or incoming Entra user token)
     let userClaims = {};
     if (userToken) {
@@ -130,10 +186,14 @@ class TokenExchangeEngine {
     }
 
     const userSub = userClaims.sub || userClaims.preferred_username || userClaims.unique_name || 'anonymous-user';
-    const userEmail = userClaims.email || userClaims.upn || userClaims.unique_name || userSub;
-    const userRoles = Array.isArray(userClaims.roles)
-      ? userClaims.roles
-      : (userClaims.realm_access?.roles || ['regular-user']);
+    const userEmail = strict
+      ? verifiedUser.identity.keycloakEmail
+      : (userClaims.email || userClaims.upn || userClaims.unique_name || userSub);
+    const userRoles = strict
+      ? verifiedUser.roles
+      : (Array.isArray(userClaims.roles)
+        ? userClaims.roles
+        : (userClaims.realm_access?.roles || ['regular-user']));
 
     const isAdmin = userRoles.includes('admin') || userRoles.includes('BigQuery.Admin');
     const userScopesFromToken = (userClaims.scope ? userClaims.scope.split(' ') : []);
@@ -161,21 +221,26 @@ class TokenExchangeEngine {
     }
 
     // 1. Determine Eligible Scopes for Principal (Strict RFC 8693 Section 2.1 Intersection)
+    // Strict mode: eligibility (group membership in the directory) intersected with consent (token scope claim).
     const userEligibleScopes = [];
-    if (isAdmin || userScopesFromToken.includes('mcp:tool1') || userRoles.includes('Storage Blob Data Reader') || userRoles.includes('Storage Blob Data Contributor') || userRoles.includes('regular-user')) {
-      userEligibleScopes.push('mcp:tool1');
-    }
-    if (isAdmin || userScopesFromToken.includes('mcp:tool2')) {
-      userEligibleScopes.push('mcp:tool2');
-    }
-    if (isAdmin || userScopesFromToken.includes('mcp:bigquery:query') || userRoles.includes('BigQuery.Admin') || userRoles.includes('BigQuery.User')) {
-      userEligibleScopes.push('mcp:bigquery:query');
-    }
-    if (isAdmin || userScopesFromToken.includes('mcp:bigquery:audit')) {
-      userEligibleScopes.push('mcp:bigquery:audit');
-    }
-    if (hasMailSend) {
-      userEligibleScopes.push('Mail.Send');
+    if (strict) {
+      userEligibleScopes.push(...verifiedUser.eligibleScopes);
+    } else {
+      if (isAdmin || userScopesFromToken.includes('mcp:tool1') || userRoles.includes('Storage Blob Data Reader') || userRoles.includes('Storage Blob Data Contributor') || userRoles.includes('regular-user')) {
+        userEligibleScopes.push('mcp:tool1');
+      }
+      if (isAdmin || userScopesFromToken.includes('mcp:tool2')) {
+        userEligibleScopes.push('mcp:tool2');
+      }
+      if (isAdmin || userScopesFromToken.includes('mcp:bigquery:query') || userRoles.includes('BigQuery.Admin') || userRoles.includes('BigQuery.User')) {
+        userEligibleScopes.push('mcp:bigquery:query');
+      }
+      if (isAdmin || userScopesFromToken.includes('mcp:bigquery:audit')) {
+        userEligibleScopes.push('mcp:bigquery:audit');
+      }
+      if (hasMailSend) {
+        userEligibleScopes.push('Mail.Send');
+      }
     }
 
     const isScopeAuthorized = userEligibleScopes.includes(requiredScopeForTool);
@@ -223,6 +288,13 @@ class TokenExchangeEngine {
     // There is no real Google exchange yet (Phase 4 replaces this with a per-user Google OAuth grant held by
     // the GCP MCP server). Outside the demo profile this fails closed instead of minting a lookalike token.
     if (isGcpTool || targetAudience === GCP_MCP_AUDIENCE || targetAudience.includes('googleapis.com')) {
+      if (strict) {
+        return this._exchangeViaIdp({
+          verifiedUser, userEmail, userRoles, requestedTool, requiredScopeForTool, agentSpiffeId,
+          recursiveAct, actorChain, userEligibleScopes, audience: GCP_MCP_CLIENT_ID
+        });
+      }
+
       if (!isSimulation()) {
         return {
           isError: true,
@@ -353,7 +425,7 @@ class TokenExchangeEngine {
       oboFailure = 'ENTRA_CLIENT_SECRET is not configured for the on-behalf-of exchange.';
     }
 
-    if (!liveEntraToken && !isSimulation()) {
+    if (!liveEntraToken && (strict || !isSimulation())) {
       return {
         isError: true,
         status: 'EXCHANGE_FAILED',

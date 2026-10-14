@@ -39,3 +39,15 @@ variable "keycloak_admin_password" {
   description = "Keycloak bootstrap admin password. Set TF_VAR_keycloak_admin_password; there is deliberately no default."
   sensitive   = true
 }
+
+variable "keycloak_image" {
+  type        = string
+  description = "Keycloak image. 26.2 or later is required for supported standard token exchange (RFC 8693)."
+  default     = "quay.io/keycloak/keycloak:26.2.5"
+}
+
+variable "keycloak_public_url" {
+  type        = string
+  description = "URL the browser uses for Keycloak; it becomes the issuer (iss) of every token"
+  default     = "http://localhost:8080"
+}

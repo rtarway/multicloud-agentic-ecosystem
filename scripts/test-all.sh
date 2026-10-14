@@ -36,6 +36,9 @@ if command -v terraform >/dev/null 2>&1; then
   terraform fmt -check -recursive "${ROOT_DIR}/terraform/identity"
 fi
 
+echo "--> 0c. Testing shared OIDC / SPIFFE helpers (JWKS verification, Workload API client)..."
+"$NODE_BIN" --test "${ROOT_DIR}"/shared/test/*.test.js
+
 echo "--> 1. Testing Azure Low-Code Declarative MCP Server (Spec 2026-07-15)..."
 cd "${ROOT_DIR}/app/mcp-server"
 "$NODE_BIN" --test test/*.test.js

@@ -24,6 +24,10 @@ spec:
           ports:
             - containerPort: 8080
               name: http
+          envFrom:
+            - configMapRef:
+                name: oidc-config
+                optional: true
           env:
             - name: PORT
               value: "8080"

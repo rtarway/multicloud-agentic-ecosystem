@@ -128,6 +128,16 @@ resource "keycloak_openid_group_membership_protocol_mapper" "groups" {
   full_path       = false
 }
 
+# Tokens issued to the web app are accepted by the orchestrator (its client id appears in `aud`).
+resource "keycloak_openid_audience_protocol_mapper" "orchestrator_audience" {
+  realm_id                 = keycloak_realm.poc.id
+  client_scope_id          = keycloak_openid_client_scope.identity.id
+  name                     = "orchestrator-audience"
+  included_client_audience = keycloak_openid_client.orchestrator.client_id
+  add_to_id_token          = false
+  add_to_access_token      = true
+}
+
 # ---- agent scopes: optional, shown on the consent screen ----
 
 resource "keycloak_openid_client_scope" "agent" {
@@ -178,7 +188,10 @@ resource "keycloak_openid_client_optional_scopes" "web_frontend" {
   optional_scopes = [for s in keys(local.scope_role_names) : keycloak_openid_client_scope.agent[s].name]
 }
 
-# Confidential client used by the orchestrator for token exchange (configured further in Phase 2).
+# Confidential client used by the orchestrator for RFC 8693 token exchange (Keycloak "standard token exchange", 26.2+).
+# It may exchange a user's access token (whose audience includes this client) for a token for ONE resource server and ONE
+# of the agent scopes it is allowed to request below. Its token carries `act.sub` = the orchestrator's SPIFFE ID, which
+# resource servers compare with the JWT-SVID the workload presents.
 resource "keycloak_openid_client" "orchestrator" {
   realm_id  = keycloak_realm.poc.id
   client_id = "agent-orchestrator-client"
@@ -189,7 +202,38 @@ resource "keycloak_openid_client" "orchestrator" {
   standard_flow_enabled        = false
   implicit_flow_enabled        = false
   direct_access_grants_enabled = false
-  service_accounts_enabled     = true
+  service_accounts_enabled     = false
+
+  extra_config = {
+    "standard.token.exchange.enabled" = "true"
+  }
+}
+
+# Only profile/email by default: no `roles` scope, so exchanged tokens do not pick up extra audiences such as `account`.
+resource "keycloak_openid_client_default_scopes" "orchestrator" {
+  realm_id       = keycloak_realm.poc.id
+  client_id      = keycloak_openid_client.orchestrator.id
+  default_scopes = ["profile", "email"]
+}
+
+# The agent scopes the orchestrator may request in an exchange (each exchange requests exactly one).
+resource "keycloak_openid_client_optional_scopes" "orchestrator" {
+  realm_id        = keycloak_realm.poc.id
+  client_id       = keycloak_openid_client.orchestrator.id
+  optional_scopes = [for s in keys(local.scope_role_names) : keycloak_openid_client_scope.agent[s].name]
+}
+
+# Delegation claim: the acting agent. Static because only this client can use the mapper.
+resource "keycloak_openid_hardcoded_claim_protocol_mapper" "orchestrator_actor" {
+  realm_id            = keycloak_realm.poc.id
+  client_id           = keycloak_openid_client.orchestrator.id
+  name                = "actor-spiffe-id"
+  claim_name          = "act.sub"
+  claim_value         = var.orchestrator_spiffe_id
+  claim_value_type    = "String"
+  add_to_id_token     = false
+  add_to_access_token = true
+  add_to_userinfo     = false
 }
 
 # Audience for tokens minted for the Azure MCP server (no interactive flows).
@@ -197,6 +241,20 @@ resource "keycloak_openid_client" "azure_mcp" {
   realm_id  = keycloak_realm.poc.id
   client_id = "mcp-azure-service"
   name      = "Azure MCP server"
+  enabled   = true
+
+  access_type                  = "CONFIDENTIAL"
+  standard_flow_enabled        = false
+  implicit_flow_enabled        = false
+  direct_access_grants_enabled = false
+  service_accounts_enabled     = false
+}
+
+# Audience for tokens minted for the GCP MCP server (no interactive flows).
+resource "keycloak_openid_client" "gcp_mcp" {
+  realm_id  = keycloak_realm.poc.id
+  client_id = "mcp-gcp-service"
+  name      = "GCP MCP server"
   enabled   = true
 
   access_type                  = "CONFIDENTIAL"

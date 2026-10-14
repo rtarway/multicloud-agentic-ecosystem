@@ -12,13 +12,23 @@ const tokenExchange = require('./tokenExchange');
 const jwtUtil = require('./jwtUtil');
 const opaPolicy = require('./opaPolicy');
 const graphClient = require('./graphClient');
-const { assertStartupSafe } = require('./simulation');
+const { assertStartupSafe, isSimulation } = require('./simulation');
+const { buildStrictRuntime, realModeBlockers } = require('./strictRuntime');
 const { redactResponses } = require('./redact');
 
 const app = express();
 app.use(express.json());
 // Never return bearer credentials (user token, SVID, exchanged tokens) to the caller.
 app.use(redactResponses);
+
+// Strict identity path (OIDC_ISSUER set): verified user tokens, directory mapping, token exchange at the IdP.
+// A misconfiguration throws here so the service fails loudly instead of degrading.
+const strictRuntime = buildStrictRuntime();
+app.locals.userAuthenticator = strictRuntime ? strictRuntime.authenticator : null;
+tokenExchange.setIdpClient(strictRuntime ? strictRuntime.idpClient : null);
+
+const AZURE_MCP_SVID_AUDIENCE = process.env.AZURE_MCP_SVID_AUDIENCE || 'azure-mcp-server';
+const GCP_MCP_SVID_AUDIENCE = process.env.GCP_MCP_SVID_AUDIENCE || 'gcp-mcp-server';
 
 const PORT = process.env.PORT || 3001;
 const MCP_SERVER_URL = process.env.AZURE_MCP_ENDPOINT || process.env.MCP_SERVER_URL || 'http://localhost:8080';
@@ -71,6 +81,15 @@ async function callMcpServer(mcpUrl, toolName, args, oboBearerToken, delegatedUs
   }
 
   // The delegated user is carried only inside the signed token; no identity header is sent.
+  // The agent proves its own identity with a JWT-SVID bound to this resource server (aud).
+  try {
+    headers['X-Agent-Identity'] = (await spireClient.fetchJwtSvid(AZURE_MCP_SVID_AUDIENCE)).token;
+  } catch (err) {
+    return {
+      isError: true,
+      content: [{ type: 'text', text: `Agent identity unavailable: ${err.message}` }]
+    };
+  }
 
   return new Promise((resolve, reject) => {
     const req = client.request(
@@ -143,6 +162,15 @@ async function callGcpMcpServer(mcpUrl, toolName, args, oboBearerToken, delegate
     headers['X-Correlation-ID'] = correlationId;
   }
   // The delegated user is carried only inside the signed token; no identity header is sent.
+  // The agent proves its own identity with a JWT-SVID bound to this resource server (aud).
+  try {
+    headers['X-Agent-Identity'] = (await spireClient.fetchJwtSvid(GCP_MCP_SVID_AUDIENCE)).token;
+  } catch (err) {
+    return {
+      isError: true,
+      content: [{ type: 'text', text: `Agent identity unavailable: ${err.message}` }]
+    };
+  }
 
   return new Promise((resolve) => {
     const req = client.request(
@@ -210,11 +238,33 @@ app.post('/api/agent/chat', async (req, res) => {
     return res.status(400).json({ error: 'Missing prompt parameter.' });
   }
 
-  // 1. Inspect User Identity from Keycloak Token or Entra User Assertion
+  // 1. Authenticate the user.
+  //    Strict mode verifies the token against the IdP and maps it through the identity directory.
+  //    The legacy decode-only path exists for the demo profile and is refused otherwise.
   let userToken = null;
   let userClaims = { sub: 'guest@example.com', roles: ['regular-user'] };
+  let verifiedUser = null;
 
-  if (authHeader && authHeader.startsWith('Bearer ')) {
+  if (app.locals.userAuthenticator) {
+    try {
+      verifiedUser = await app.locals.userAuthenticator.authenticate(authHeader);
+    } catch (err) {
+      return res.status(err.status || 401).json({ error: 'UNAUTHENTICATED', code: err.code || 'AUTH_FAILED', message: err.message });
+    }
+    userToken = verifiedUser.token;
+    userClaims = {
+      sub: verifiedUser.identity.keycloakEmail,
+      email: verifiedUser.identity.keycloakEmail,
+      roles: verifiedUser.roles,
+      groups: verifiedUser.groups,
+      scope: verifiedUser.consentedScopes.join(' ')
+    };
+  } else if (!isSimulation()) {
+    return res.status(503).json({
+      error: 'AUTHENTICATION_NOT_CONFIGURED',
+      message: 'OIDC_ISSUER is not configured, so user tokens cannot be verified. Refusing to trust an unverified token.'
+    });
+  } else if (authHeader && authHeader.startsWith('Bearer ')) {
     userToken = authHeader.substring(7).trim();
     const decoded = jwtUtil.decode(userToken);
     if (decoded) {
@@ -317,6 +367,7 @@ app.post('/api/agent/chat', async (req, res) => {
     const step1 = plan.steps[0];
     const step1Exchange = await tokenExchange.exchangeToken({
       userToken,
+      verifiedUser,
       userEntraToken: activeEntraAssertion,
       agentSvid,
       targetAudience: entraAudience,
@@ -381,6 +432,7 @@ app.post('/api/agent/chat', async (req, res) => {
 
       step2Exchange = await tokenExchange.exchangeToken({
         userToken,
+        verifiedUser,
         agentSvid,
         targetAudience: gcpAudience,
         requestedTool: step2.tool,
@@ -685,6 +737,7 @@ app.post('/api/agent/chat', async (req, res) => {
     const step1 = plan.steps[0];
     const step1Exchange = await tokenExchange.exchangeToken({
       userToken,
+      verifiedUser,
       userEntraToken: activeEntraAssertion,
       agentSvid,
       targetAudience: entraAudience,
@@ -746,6 +799,7 @@ app.post('/api/agent/chat', async (req, res) => {
       const step2 = plan.steps[1];
       step2Exchange = await tokenExchange.exchangeToken({
         userToken,
+        verifiedUser,
         userEntraToken: activeEntraAssertion,
         agentSvid,
         targetAudience: entraAudience,
@@ -877,6 +931,7 @@ app.post('/api/agent/chat', async (req, res) => {
         // RFC 8693 Token Exchange for Microsoft Graph (Audience: https://graph.microsoft.com, Scope: Mail.Send)
         step4Exchange = await tokenExchange.exchangeToken({
           userToken,
+          verifiedUser,
           agentSvid,
           targetAudience: 'https://graph.microsoft.com',
           requestedTool: 'microsoft_graph_direct'
@@ -1138,6 +1193,7 @@ app.post('/api/agent/chat', async (req, res) => {
 
   const exchangeResult = await tokenExchange.exchangeToken({
     userToken,
+    verifiedUser,
     userEntraToken: activeEntraAssertion,
     agentSvid,
     targetAudience,
@@ -1297,12 +1353,7 @@ app.post('/api/agent/chat', async (req, res) => {
 });
 
 if (require.main === module) {
-  assertStartupSafe('agent-orchestrator', {
-    realModeBlockers: [
-      'the SPIRE Workload API client is not implemented (Phase 2); only a locally signed SVID is available',
-      'user token verification against the IdP JWKS is not implemented (Phase 2)'
-    ]
-  });
+  assertStartupSafe('agent-orchestrator', { realModeBlockers: realModeBlockers() });
   app.listen(PORT, () => {
     console.log(`===========================================================`);
     console.log(` A2A Agent Orchestrator listening on port ${PORT}`);

@@ -20,3 +20,11 @@ output "users" {
   description = "Provisioned users and whether they are enabled. Set their passwords in the admin console."
   value       = { for k, u in module.directory.users : k => u.enabled }
 }
+
+output "gcp_mcp_client_id" {
+  value = keycloak_openid_client.gcp_mcp.client_id
+}
+
+output "azure_mcp_client_id" {
+  value = keycloak_openid_client.azure_mcp.client_id
+}

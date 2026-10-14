@@ -15,6 +15,8 @@ declare -A TARGETS=(
   [demoKeys.js]="agent-orchestrator gcp-mcp-server mcp-server web-frontend"
   [redact.js]="agent-orchestrator web-frontend"
   [identityMapping.js]="agent-orchestrator gcp-mcp-server mcp-server"
+  [oidc.js]="agent-orchestrator gcp-mcp-server mcp-server web-frontend"
+  [spiffe.js]="agent-orchestrator gcp-mcp-server mcp-server"
 )
 
 status=0

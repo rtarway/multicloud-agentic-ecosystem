@@ -52,8 +52,8 @@ resource "kubernetes_deployment" "keycloak" {
 
         container {
           name  = "keycloak"
-          image = "quay.io/keycloak/keycloak:24.0.4"
-          args  = ["start-dev", "--features=token-exchange,admin-fine-grained-authz"]
+          image = var.keycloak_image
+          args  = ["start-dev"]
 
           env {
             name = "KEYCLOAK_ADMIN"
@@ -77,9 +77,15 @@ resource "kubernetes_deployment" "keycloak" {
             name  = "KC_HTTP_ENABLED"
             value = "true"
           }
+          # A fixed public URL makes the `iss` claim identical no matter how Keycloak is reached (browser via port-forward,
+          # services via the cluster DNS name). Back-channel endpoints (token, JWKS) stay reachable on the internal URL.
           env {
-            name  = "KC_HOSTNAME_STRICT"
-            value = "false"
+            name  = "KC_HOSTNAME"
+            value = var.keycloak_public_url
+          }
+          env {
+            name  = "KC_HOSTNAME_BACKCHANNEL_DYNAMIC"
+            value = "true"
           }
           env {
             name  = "JAVA_OPTS_APPEND"

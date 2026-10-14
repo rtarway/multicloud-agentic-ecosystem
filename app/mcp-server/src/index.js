@@ -88,7 +88,7 @@ app.post('/mcp', async (req, res) => {
     const correlationId = req.headers['x-correlation-id'] || req.headers['x-ms-client-request-id'] || ('chain-' + Date.now());
     console.log(`[MCP-RPC] Correlation ID: ${correlationId}`);
 
-    const authContext = await verifyOboToken(authHeader, delegatedHeader);
+    const authContext = await verifyOboToken(authHeader, delegatedHeader, req.headers['x-agent-identity']);
     authContext.correlationId = correlationId;
 
     if (!authContext.authenticated) {
@@ -144,7 +144,7 @@ app.get('/api/tools', (req, res) => {
 app.post('/api/tools/:name', async (req, res) => {
   const toolName = req.params.name;
   const authHeader = req.headers['authorization'];
-  const authContext = await verifyOboToken(authHeader);
+  const authContext = await verifyOboToken(authHeader, undefined, req.headers['x-agent-identity']);
 
   if (!authContext.authenticated) {
     return res.json({
@@ -159,7 +159,9 @@ app.post('/api/tools/:name', async (req, res) => {
 
 // Start Server if invoked directly
 if (require.main === module) {
-  assertStartupSafe('azure-mcp-server');
+  assertStartupSafe('azure-mcp-server', {
+    realModeBlockers: process.env.SPIRE_OIDC_ISSUER ? [] : ['SPIRE_OIDC_ISSUER is not set (the calling agent cannot be verified)']
+  });
   app.listen(PORT, () => {
     console.log(`===========================================================`);
     console.log(` Azure Low-Code Declarative MCP Server listening on ${PORT}`);
